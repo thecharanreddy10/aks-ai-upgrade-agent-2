@@ -73,12 +73,11 @@ def require_remediation_approval(
     is_destructive: bool = False,
     confirm_destructive: bool = False,
 ) -> None:
-    """Enforce write gates for remediation tools.
+    """Enforce write gates for remediation tools without an application-level token.
 
-    The ``approval_token`` parameter is retained for backwards compatibility with existing
-    remediation callers, but is no longer used as an application-level authorization gate.
-    Actual authorization comes from the explicit full-check/write gates and the MCP runtime's
-    Azure/Kubernetes identity.
+    The ``approval_token`` parameter remains only for backwards compatibility with existing
+    callers. It is not read or validated. Authorization comes from the explicit full-check/write
+    gates and the MCP runtime's Azure/Kubernetes identity.
     """
     if check_mode != "full":
         raise PermissionError("Remediation write operations require check_mode='full'.")
@@ -140,19 +139,15 @@ def _extract_json_payload(output: str) -> str:
     """Extract the first JSON document from mixed command output."""
     first_obj = output.find("{")
     first_arr = output.find("[")
-
     candidates = [idx for idx in (first_obj, first_arr) if idx != -1]
     if not candidates:
         raise ValueError("No JSON payload found in command output.")
-
     start = min(candidates)
     end_obj = output.rfind("}")
     end_arr = output.rfind("]")
     end = max(end_obj, end_arr)
-
     if end < start:
         raise ValueError("Invalid JSON boundaries in command output.")
-
     return output[start : end + 1]
 
 
@@ -222,9 +217,9 @@ def run_kubectl_batch(
     for label, kubectl_args in queries.items():
         lines.append(f"RAW=$(kubectl {kubectl_args} -o json 2>/dev/null)")
         lines.append("CODE=$?")
-        lines.append('echo "===BEGIN:' + label + '===")
+        lines.append("echo '===BEGIN:" + label + "==='" )
         lines.append('echo "$RAW"')
-        lines.append('echo "===END:' + label + ':EXIT=$CODE===")
+        lines.append("echo '===END:" + label + ":EXIT='$CODE'==='" )
     script = "\n".join(lines)
 
     raw_output = run_kubectl_raw(subscription_id, resource_group, cluster_name, script)
