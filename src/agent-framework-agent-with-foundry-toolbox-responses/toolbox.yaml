@@ -1,0 +1,13 @@
+# toolbox.yaml
+# Defines the toolbox this agent consumes. Create it once with:
+#   azd ai toolbox create agent-tools --from-file ./toolbox.yaml
+# After creating it, copy the versioned MCP endpoint the command prints and
+# set it as the TOOLBOX_ENDPOINT environment variable. The agent connects to
+# that endpoint at runtime.
+description: AKS upgrade operations toolbox
+tools:
+  - type: mcp
+    # AKS operations MCP server (discovery/validation/upgrade tools), no auth required
+    server_label: aks-ops
+    server_url: "https://aks-mcp.happyriver-781373bd.eastus2.azurecontainerapps.io/mcp"
+    require_approval: "never"

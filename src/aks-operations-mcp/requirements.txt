@@ -1,0 +1,6 @@
+# AKS MCP dependencies.
+azure-identity>=1.19.0
+azure-mgmt-containerservice>=35.0.0
+kubernetes>=31.0.0
+azure-functions>=1.21.3
+mcp>=1.2.0,<2

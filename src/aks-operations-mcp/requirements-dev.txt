@@ -1,0 +1,3 @@
+# Test-only dependencies; excluded from the container image via .dockerignore.
+-r requirements.txt
+pytest>=8.0.0
