@@ -1,6 +1,6 @@
 # AKS Operations MCP (Phase 2)
 
-This project exposes AKS operational checks as MCP tools over Streamable HTTP.
+This project exposes AKS operational checks as MCP tools over MCP HTTP transports.
 
 In Phase 4, it also includes an Azure Functions entrypoint (`function_app.py`) at `/api/mcp` for remote hosting/deployment.
 
@@ -12,8 +12,16 @@ In Phase 4, it also includes an Azure Functions entrypoint (`function_app.py`) a
 - `aks_check_node_health`
 - `aks_check_pod_health`
 - `aks_check_pdb`
+- `aks_check_storage`
+- `aks_check_deprecated_apis`
 - `aks_validate_upgrade_readiness`
 - `aks_upgrade_node_pool`
+- `aks_remediate_pdb`
+- `aks_remediate_pods`
+- `aks_remediate_node`
+- `aks_remediate_storage`
+- `aks_remediate_deprecated_apis`
+- `aks_generate_deprecated_api_manifests`
 
 ## Upgrade guardrails
 
@@ -31,6 +39,25 @@ Optional env vars:
 
 - `AKS_UPGRADE_ENABLE_WRITE` (default: `false`)
 - `AKS_UPGRADE_APPROVAL_TOKEN` (optional second-factor gate)
+
+## PDB remediation guardrails
+
+`aks_remediate_pdb` defaults to `dry_run=true` so an assessment never mutates the cluster.
+When the agent is explicitly instructed to remediate, it can call the tool with `dry_run=false`.
+Write execution requires:
+
+1. `check_mode=full` (the PDB remediation tool now defaults to `full`).
+2. `AKS_REMEDIATION_ENABLE_WRITE=true`.
+3. `AKS_REMEDIATION_APPROVAL_TOKEN` must be configured on the MCP server.
+
+The approval token is resolved server-side when the caller omits `approval_token`, so the LLM/agent
+never needs to receive the secret. A caller-supplied token is still validated against the same
+server-side value. Protected Kubernetes namespaces remain blocked.
+
+Required remediation environment variables for an enabled POC deployment:
+
+- `AKS_REMEDIATION_ENABLE_WRITE=true`
+- `AKS_REMEDIATION_APPROVAL_TOKEN=<store as a deployment secret; do not put it in agent instructions>`
 
 ## Local run
 
@@ -67,6 +94,7 @@ Optional environment variables:
 The runtime identity needs permission to:
 
 - Read AKS managed cluster and agent pool metadata.
-- Execute AKS run command API for Kubernetes health checks.
+- Execute AKS run command API for Kubernetes health checks and approved remediation commands.
+- Have sufficient Kubernetes authorization for the requested remediation (for example, scaling a Deployment/StatefulSet or patching a PDB).
 
 These roles are wired in later phases through infrastructure.
