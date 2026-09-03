@@ -28,17 +28,16 @@ In Phase 4, it also includes an Azure Functions entrypoint (`function_app.py`) a
 `aks_upgrade_node_pool` is protected by default:
 
 1. It runs health and safety prechecks (nodes, pods, PDB, optional maintenance window).
-\t- `check_mode=quick` (default): lightweight gate suitable for frequent calls.
-\t- `check_mode=full`: runs deep Kubernetes checks (slower, stricter).
+   - `check_mode=quick` (default): lightweight gate suitable for frequent calls.
+   - `check_mode=full`: runs deep Kubernetes checks (slower, stricter).
 2. It defaults to `dry_run=true`.
 3. Real writes require `AKS_UPGRADE_ENABLE_WRITE=true`.
-4. If `AKS_UPGRADE_APPROVAL_TOKEN` is set, callers must provide matching `approval_token`.
-5. Real writes additionally require `check_mode=full`.
+4. Real writes additionally require `check_mode=full`.
+5. The MCP runtime identity must have sufficient Azure authorization for the requested operation.
 
-Optional env vars:
+Optional env var:
 
 - `AKS_UPGRADE_ENABLE_WRITE` (default: `false`)
-- `AKS_UPGRADE_APPROVAL_TOKEN` (optional second-factor gate)
 
 ## Remediation guardrails
 
@@ -53,7 +52,7 @@ Real remediation writes require:
 5. Protected cluster-critical namespaces remain blocked.
 6. Destructive remediations require their explicit destructive-operation confirmation flag.
 
-There is no application-level remediation approval token. The LLM/agent does not need to receive or provide a secret token. The security boundary for the POC is the explicit write-enable setting, remediation-specific confirmation for destructive actions, and the runtime identity's Azure/Kubernetes permissions.
+There is no application-level approval token for upgrade or remediation operations. The LLM/agent does not receive or provide a secret token. The security boundary is the explicit write-enable setting, remediation-specific confirmation for destructive actions, and the runtime identity's Azure/Kubernetes permissions.
 
 ## Local run
 
@@ -68,16 +67,16 @@ Once deployed to Azure Functions, validate the endpoint:
 
 ```bash
 curl -X POST "https://<function-app-name>.azurewebsites.net/api/mcp" \\
-\t-H "Content-Type: application/json" \\
-\t-d '{"jsonrpc":"2.0","id":"1","method":"tools/list","params":{}}'
+    -H "Content-Type: application/json" \\
+    -d '{"jsonrpc":"2.0","id":"1","method":"tools/list","params":{}}'
 ```
 
 Tool call example:
 
 ```bash
 curl -X POST "https://<function-app-name>.azurewebsites.net/api/mcp" \\
-\t-H "Content-Type: application/json" \\
-\t-d '{"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"aks_get_cluster_details","arguments":{"subscription_id":"<sub>","resource_group":"<rg>","cluster_name":"<name>"}}}'
+    -H "Content-Type: application/json" \\
+    -d '{"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"aks_get_cluster_details","arguments":{"subscription_id":"<sub>","resource_group":"<rg>","cluster_name":"<name>"}}}'
 ```
 
 Optional environment variables:
