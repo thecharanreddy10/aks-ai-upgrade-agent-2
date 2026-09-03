@@ -102,7 +102,6 @@ def aks_validate_upgrade_readiness(
             if pod_health.get("unhealthy_pods"):
                 blockers.append("Unhealthy pods detected.")
             elif pod_health.get("query_errors"):
-                # A failed/incomplete pod query must never be silently treated as healthy.
                 blockers.append("Pod health could not be fully checked; query_errors present.")
 
         if "pdb_health" in results:
@@ -164,7 +163,6 @@ def aks_upgrade_node_pool(
     kubernetes_version: str,
     namespace: str | None = None,
     dry_run: bool = True,
-    approval_token: str | None = None,
     maintenance_window_start_utc: str | None = None,
     maintenance_window_end_utc: str | None = None,
     check_mode: str = "quick",
@@ -174,7 +172,7 @@ def aks_upgrade_node_pool(
     Guardrails:
     - Health gates must pass.
     - Defaults to dry-run mode.
-    - Non-dry-run requires env gate + approval token validation.
+    - Non-dry-run requires env gate.
     """
     readiness = aks_validate_upgrade_readiness(
         subscription_id=subscription_id,
@@ -219,10 +217,6 @@ def aks_upgrade_node_pool(
 
     if os.getenv("AKS_UPGRADE_ENABLE_WRITE", "false").lower() != "true":
         raise PermissionError("Upgrade write operations are disabled. Set AKS_UPGRADE_ENABLE_WRITE=true to enable.")
-
-    expected_token = os.getenv("AKS_UPGRADE_APPROVAL_TOKEN")
-    if expected_token and approval_token != expected_token:
-        raise PermissionError("Invalid approval token for upgrade execution.")
 
     client = get_container_service_client(subscription_id)
     pool = client.agent_pools.get(resource_group, cluster_name, node_pool_name)
