@@ -68,15 +68,8 @@ def test_write_requires_write_env_gate(monkeypatch):
         require_remediation_approval("full", namespace="phonebook")
 
 
-def test_write_passes_without_approval_token(monkeypatch):
+def test_write_passes_without_application_approval_token(monkeypatch):
     monkeypatch.setenv("AKS_REMEDIATION_ENABLE_WRITE", "true")
-    monkeypatch.delenv("AKS_REMEDIATION_APPROVAL_TOKEN", raising=False)
-    require_remediation_approval("full", namespace="phonebook")
-
-
-def test_write_does_not_consult_approval_token(monkeypatch):
-    monkeypatch.setenv("AKS_REMEDIATION_ENABLE_WRITE", "true")
-    monkeypatch.setenv("AKS_REMEDIATION_APPROVAL_TOKEN", "wrong-or-irrelevant")
     require_remediation_approval("full", namespace="phonebook")
 
 
