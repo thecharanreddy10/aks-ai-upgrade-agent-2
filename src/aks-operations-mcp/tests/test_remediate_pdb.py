@@ -7,6 +7,7 @@ import pytest
 from tools import remediate_pdb
 from tools.remediate_pdb import (
     aks_remediate_pdb,
+    aks_rollback_pdb_remediation,
     _build_label_selector,
     _plan_relax_pdb,
     _plan_scale_workload,
@@ -166,6 +167,19 @@ def test_restore_pdb_command_has_valid_json_payload():
     assert payload_obj == {"spec": {"minAvailable": 2, "maxUnavailable": None}}
 
 
+def test_restore_pdb_command_preserves_percentage_values():
+    cmd = remediate_pdb._restore_pdb_command(
+        "web-pdb",
+        "phonebook",
+        original_min_available="80%",
+        original_max_unavailable=None,
+    )
+
+    payload = cmd.split("-p ", 1)[1].strip().strip("'")
+    payload_obj = __import__("json").loads(payload)
+    assert payload_obj == {"spec": {"minAvailable": "80%", "maxUnavailable": None}}
+
+
 def test_dry_run_returns_plan_without_execution(monkeypatch):
     pdb = {
         "kind": "PodDisruptionBudget",
@@ -217,3 +231,92 @@ def test_relax_pdb_preserves_original_spec():
     # Verify original is preserved exactly
     assert plan["original_spec"]["minAvailable"] == 3
     assert plan["original_spec"]["maxUnavailable"] is None
+
+
+def test_rollback_relax_pdb_dry_run_builds_restore_step(monkeypatch):
+    pdb = {
+        "kind": "PodDisruptionBudget",
+        "metadata": {"name": "web-pdb"},
+        "spec": {"minAvailable": None, "maxUnavailable": 1},
+    }
+    monkeypatch.setattr(remediate_pdb, "run_kubectl_json", lambda *_a, **_k: pdb)
+    monkeypatch.setattr(
+        remediate_pdb,
+        "run_kubectl_raw",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("dry run must not write")),
+    )
+
+    result = aks_rollback_pdb_remediation(
+        *CLUSTER_ARGS,
+        "phonebook",
+        "web-pdb",
+        strategy="relax_pdb",
+        original_min_available=2,
+        original_max_unavailable=None,
+        dry_run=True,
+    )
+
+    assert result["status"] == "dry_run"
+    assert result["steps"][0]["kind"] == "PodDisruptionBudget"
+    assert result["steps"][0]["rollback_command"] == (
+        "kubectl patch pdb web-pdb -n phonebook --type=merge -p "
+        "'{\"spec\":{\"minAvailable\":2,\"maxUnavailable\":null}}'"
+    )
+
+
+def test_rollback_relax_pdb_executes_restore(monkeypatch):
+    pdb = {
+        "kind": "PodDisruptionBudget",
+        "metadata": {"name": "web-pdb"},
+        "spec": {"minAvailable": None, "maxUnavailable": 1},
+    }
+    calls = []
+    monkeypatch.setattr(remediate_pdb, "run_kubectl_json", lambda *_a, **_k: pdb)
+    monkeypatch.setattr(remediate_pdb, "require_remediation_approval", lambda *_a, **_k: None)
+    monkeypatch.setattr(remediate_pdb, "run_kubectl_raw", lambda *args, **_k: calls.append(args) or "patched")
+
+    result = aks_rollback_pdb_remediation(
+        *CLUSTER_ARGS,
+        "phonebook",
+        "web-pdb",
+        strategy="relax_pdb",
+        original_min_available=2,
+        original_max_unavailable=None,
+        dry_run=False,
+    )
+
+    assert result["status"] == "rolled_back"
+    assert len(calls) == 1
+    assert calls[0][-1] == (
+        "kubectl patch pdb web-pdb -n phonebook --type=merge -p "
+        "'{\"spec\":{\"minAvailable\":2,\"maxUnavailable\":null}}'"
+    )
+
+
+def test_rollback_scale_workload_executes_restore(monkeypatch):
+    pdb = {
+        "kind": "PodDisruptionBudget",
+        "metadata": {"name": "web-pdb"},
+        "spec": {"minAvailable": None, "maxUnavailable": 1},
+    }
+    calls = []
+    monkeypatch.setattr(remediate_pdb, "run_kubectl_json", lambda *_a, **_k: pdb)
+    monkeypatch.setattr(remediate_pdb, "require_remediation_approval", lambda *_a, **_k: None)
+    monkeypatch.setattr(remediate_pdb, "run_kubectl_raw", lambda *args, **_k: calls.append(args) or "scaled")
+
+    result = aks_rollback_pdb_remediation(
+        *CLUSTER_ARGS,
+        "phonebook",
+        "web-pdb",
+        strategy="scale_workload_up",
+        workload_kind="Deployment",
+        workload_name="webserver-deploy",
+        original_replicas=4,
+        dry_run=False,
+    )
+
+    assert result["status"] == "rolled_back"
+    assert len(calls) == 1
+    assert calls[0][-1] == (
+        "kubectl scale deployment webserver-deploy -n phonebook --replicas=4"
+    )
