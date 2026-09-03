@@ -34,17 +34,7 @@ def aks_remediate_storage(
     approval_token: str | None = None,
     check_mode: str = "quick",
 ) -> dict[str, Any]:
-    """Execute a storage remediation plan to unblock upgrade-readiness issues.
-
-    Strategies:
-    - cleanup_pvc: Delete unbound PVCs in Terminating state (namespace-scoped).
-                   Allows finalizers to complete and reclaim policies to work.
-    - cleanup_pv: Find orphaned PersistentVolumes (cluster-scoped).
-                  Gracefully delete or mark for cleanup.
-
-    Returns a plan with exact kubectl commands. No cluster writes unless
-    dry_run=False + approval gates pass.
-    """
+    """Execute a storage remediation plan to unblock upgrade-readiness issues."""
     if strategy not in ("cleanup_pvc", "cleanup_pv"):
         raise ValueError(f"Unknown strategy: {strategy!r}")
 
@@ -58,7 +48,7 @@ def aks_remediate_storage(
         plan = _plan_cleanup_pvc(
             subscription_id, resource_group, cluster_name, namespace, storage_name
         )
-    else:  # cleanup_pv
+    else:
         if storage_name:
             validate_k8s_name(storage_name, "pv")
         plan = _plan_cleanup_pv(
@@ -87,6 +77,13 @@ def aks_remediate_storage(
     )
 
 
+def _is_terminating_unbound_pvc(pvc: dict[str, Any]) -> bool:
+    """Return True only for PVCs that are both terminating and not Bound."""
+    metadata = pvc.get("metadata", {})
+    phase = pvc.get("status", {}).get("phase")
+    return bool(metadata.get("deletionTimestamp")) and phase != "Bound"
+
+
 def _plan_cleanup_pvc(
     subscription_id: str,
     resource_group: str,
@@ -94,7 +91,7 @@ def _plan_cleanup_pvc(
     namespace: str,
     pvc_name: str | None,
 ) -> dict[str, Any]:
-    """Plan cleaning up unbound PersistentVolumeClaims in Terminating state."""
+    """Plan cleanup only for terminating, unbound PVCs."""
     if pvc_name:
         pvc_payload = run_kubectl_json(
             subscription_id,
@@ -104,8 +101,7 @@ def _plan_cleanup_pvc(
         )
         if not pvc_payload or pvc_payload.get("kind") != "PersistentVolumeClaim":
             return {"error": f"PVC {namespace}/{pvc_name} not found."}
-
-        pvcs = [pvc_payload]
+        pvcs = [pvc_payload] if _is_terminating_unbound_pvc(pvc_payload) else []
     else:
         all_pvcs = run_kubectl_json(
             subscription_id,
@@ -114,28 +110,26 @@ def _plan_cleanup_pvc(
             f"get pvc -n {namespace} -o json",
         )
         pvcs = [
-            pvc
-            for pvc in all_pvcs.get("items", [])
-            if pvc.get("metadata", {}).get("deletionTimestamp")
+            pvc for pvc in all_pvcs.get("items", []) if _is_terminating_unbound_pvc(pvc)
         ]
 
     if not pvcs:
         return {
             "status": "no_action",
-            "message": f"No PVCs in Terminating state found in {namespace}.",
+            "message": f"No terminating, unbound PVCs found in {namespace}.",
         }
 
     steps = []
     for pvc in pvcs:
-        pvc_name = pvc.get("metadata", {}).get("name")
+        name = pvc.get("metadata", {}).get("name")
         steps.append({
             "type": "delete_pvc",
             "kind": "PersistentVolumeClaim",
-            "name": pvc_name,
+            "name": name,
             "namespace": namespace,
-            "kubectl_command": f"kubectl delete pvc {pvc_name} -n {namespace} --grace-period=30",
-            "force_delete_command": f"kubectl delete pvc {pvc_name} -n {namespace} --grace-period=0 --force",
-            "description": "Delete unbound PVC; allow reclaim policy (Delete/Retain) to take effect.",
+            "kubectl_command": f"kubectl delete pvc {name} -n {namespace} --grace-period=30",
+            "force_delete_command": f"kubectl delete pvc {name} -n {namespace} --grace-period=0 --force",
+            "description": "Delete terminating, unbound PVC; allow reclaim policy to take effect.",
         })
 
     return {
@@ -144,8 +138,8 @@ def _plan_cleanup_pvc(
         "pvcs_to_delete": len(steps),
         "steps": steps,
         "post_verification": {
-            "command": f"kubectl get pvc -n {namespace} --field-selector metadata.deletionTimestamp!='' --no-headers | wc -l",
-            "expected": "0 (all Terminating PVCs resolved)",
+            "command": f"kubectl get pvc -n {namespace} -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,DELETING:.metadata.deletionTimestamp --no-headers",
+            "expected": "No remaining PVC with a deletion timestamp and non-Bound phase",
         },
     }
 
@@ -156,7 +150,7 @@ def _plan_cleanup_pv(
     cluster_name: str,
     pv_name: str | None,
 ) -> dict[str, Any]:
-    """Plan cleaning up orphaned/stuck PersistentVolumes."""
+    """Plan cleanup for PVs in Released or Failed phase only."""
     if pv_name:
         pv_payload = run_kubectl_json(
             subscription_id,
@@ -166,7 +160,6 @@ def _plan_cleanup_pv(
         )
         if not pv_payload or pv_payload.get("kind") != "PersistentVolume":
             return {"error": f"PV {pv_name} not found."}
-
         pvs = [pv_payload]
     else:
         all_pvs = run_kubectl_json(
@@ -177,14 +170,9 @@ def _plan_cleanup_pv(
         )
         pvs = all_pvs.get("items", [])
 
-    stuck_pvs = []
-    for pv in pvs:
-        status = pv.get("status", {}).get("phase")
-        claim_ref = pv.get("spec", {}).get("claimRef")
-        if status in ("Failed", "Released") or (
-            status == "Bound" and not claim_ref
-        ):
-            stuck_pvs.append(pv)
+    stuck_pvs = [
+        pv for pv in pvs if pv.get("status", {}).get("phase") in ("Failed", "Released")
+    ]
 
     if not stuck_pvs:
         return {
@@ -194,15 +182,15 @@ def _plan_cleanup_pv(
 
     steps = []
     for pv in stuck_pvs:
-        pv_name = pv.get("metadata", {}).get("name")
+        name = pv.get("metadata", {}).get("name")
         reclaim = pv.get("spec", {}).get("persistentVolumeReclaimPolicy", "Retain")
         steps.append({
             "type": "delete_pv",
             "kind": "PersistentVolume",
-            "name": pv_name,
+            "name": name,
             "reclaim_policy": reclaim,
-            "kubectl_command": f"kubectl delete pv {pv_name}",
-            "description": f"Delete orphaned PV; reclaim policy is {reclaim}.",
+            "kubectl_command": f"kubectl delete pv {name}",
+            "description": f"Delete PV in {pv.get('status', {}).get('phase')} phase; reclaim policy is {reclaim}.",
         })
 
     return {
@@ -211,8 +199,8 @@ def _plan_cleanup_pv(
         "pvs_to_delete": len(steps),
         "steps": steps,
         "post_verification": {
-            "command": "kubectl get pv --field-selector status.phase=Failed,status.phase=Released --no-headers | wc -l",
-            "expected": "0 (all orphaned PVs deleted or recovered)",
+            "command": "kubectl get pv -o custom-columns=NAME:.metadata.name,PHASE:.status.phase --no-headers | awk '$2==\"Failed\" || $2==\"Released\" {count++} END {print count+0}'",
+            "expected": "0",
         },
     }
 
@@ -228,10 +216,7 @@ def _apply_plan(
 ) -> dict[str, Any]:
     """Execute the storage remediation plan."""
     if "error" in plan:
-        return {
-            "status": "failed",
-            "reason": plan["error"],
-        }
+        return {"status": "failed", "reason": plan["error"]}
 
     if plan.get("status") == "no_action":
         return plan
@@ -241,15 +226,13 @@ def _apply_plan(
         for step in plan.get("steps", []):
             command = step.get("kubectl_command")
             raw_logs = run_kubectl_raw(subscription_id, resource_group, cluster_name, command)
-            applied_changes.append(
-                {
-                    "type": step.get("type"),
-                    "kind": step.get("kind"),
-                    "name": step.get("name"),
-                    "description": step.get("description"),
-                    "output": raw_logs[:200],
-                }
-            )
+            applied_changes.append({
+                "type": step.get("type"),
+                "kind": step.get("kind"),
+                "name": step.get("name"),
+                "description": step.get("description"),
+                "output": raw_logs[:200],
+            })
     except Exception as exc:  # noqa: BLE001
         return {
             "status": "failed",
