@@ -70,12 +70,23 @@ def test_cleanup_pv_does_not_target_bound_pv_without_claim_ref(monkeypatch):
     assert [step["name"] for step in plan["steps"]] == ["released-pv"]
 
 
-def test_cleanup_pv_verification_checks_failed_or_released_independently(monkeypatch):
-    plan = _plan_cleanup_pv(
-        *CLUSTER_ARGS,
-        None,
+def test_cleanup_pv_verification_command_uses_or_for_failed_or_released(monkeypatch):
+    monkeypatch.setattr(
+        remediate_storage,
+        "run_kubectl_json",
+        lambda *_a, **_k: {
+            "items": [
+                {
+                    "metadata": {"name": "released-pv"},
+                    "status": {"phase": "Released"},
+                    "spec": {},
+                }
+            ]
+        },
     )
 
-    # This test is intentionally replaced by the next monkeypatched planning call;
-    # it keeps the regression focused on the generated verification command.
-    assert plan["status"] == "no_action"
+    plan = _plan_cleanup_pv(*CLUSTER_ARGS, None)
+    command = plan["post_verification"]["command"]
+
+    assert '"Failed" || $2=="Released"' in command
+    assert plan["post_verification"]["expected"] == "0"
