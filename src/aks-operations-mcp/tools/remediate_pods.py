@@ -3,8 +3,7 @@
 Strategies:
 - rollout_restart: Restart the Deployment/StatefulSet that owns the pod.
   Triggers a rolling update with new pods. Non-destructive, fully reversible.
-- delete_pod: Force-delete the pod with configurable grace period.
-  Allows the controller (Deployment/StatefulSet) to recreate the pod.
+- delete_pod: Delete the pod with a configurable grace period so its controller can recreate it.
 
 Neither strategy directly deletes the workload controller.
 """
@@ -38,7 +37,7 @@ def aks_remediate_pods(
 
     Strategies:
     - rollout_restart: Restart the Deployment/StatefulSet that owns the pod.
-    - delete_pod: Force-delete with grace period, triggering pod recreation.
+    - delete_pod: Delete the pod with grace period, triggering pod recreation.
 
     Returns a plan with exact kubectl commands. No cluster writes unless
     dry_run=False + approval gates pass.
@@ -57,8 +56,11 @@ def aks_remediate_pods(
         )
 
     if strategy == "rollout_restart":
-        plan = _plan_rollout_restart(namespace, pod)
-    else:  # delete_pod
+        owner_ref = _resolve_workload_owner(
+            subscription_id, resource_group, cluster_name, namespace, pod
+        )
+        plan = _plan_rollout_restart(namespace, pod, owner_ref=owner_ref)
+    else:
         plan = _plan_delete_pod(namespace, pod)
 
     if dry_run:
@@ -100,16 +102,57 @@ def _fetch_pod(
     return payload if payload.get("kind") == "Pod" else None
 
 
+def _resolve_workload_owner(
+    subscription_id: str,
+    resource_group: str,
+    cluster_name: str,
+    namespace: str,
+    pod: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Resolve a Pod's controller to Deployment/StatefulSet.
+
+    Kubernetes Pods created by a Deployment normally have a ReplicaSet as their
+    direct owner, not the Deployment itself. Follow that ReplicaSet's owner
+    reference so rollout_restart targets the actual workload controller.
+    """
+    direct_owner = _find_owner_reference(pod)
+    if direct_owner:
+        return direct_owner
+
+    owner_refs = pod.get("metadata", {}).get("ownerReferences", [])
+    replica_set_ref = next(
+        (ref for ref in owner_refs if ref.get("kind") == "ReplicaSet"),
+        None,
+    )
+    if not replica_set_ref:
+        return None
+
+    replica_set_name = replica_set_ref.get("name")
+    if not replica_set_name or not validate_k8s_name(replica_set_name, "ReplicaSet"):
+        return None
+
+    replica_set = run_kubectl_json(
+        subscription_id,
+        resource_group,
+        cluster_name,
+        f"get replicaset {replica_set_name} -n {namespace}",
+    )
+    if replica_set.get("kind") != "ReplicaSet":
+        return None
+
+    return _find_owner_reference(replica_set)
+
+
 def _plan_rollout_restart(
     namespace: str,
     pod: dict[str, Any],
+    owner_ref: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Plan restarting the Deployment/StatefulSet that owns this pod."""
-    owner_ref = _find_owner_reference(pod)
+    owner_ref = owner_ref or _find_owner_reference(pod)
     all_owners = pod.get("metadata", {}).get("ownerReferences", [])
 
     if not owner_ref and all_owners:
-        # Pod has owners but none are Deployment/StatefulSet
         other_kind = all_owners[0].get("kind", "Unknown")
         return {
             "error": f"Pod owner is {other_kind}, not Deployment/StatefulSet; cannot rollout restart.",
@@ -124,6 +167,11 @@ def _plan_rollout_restart(
 
     kind = owner_ref.get("kind")
     name = owner_ref.get("name")
+    if kind not in ("Deployment", "StatefulSet") or not name:
+        return {
+            "error": f"Resolved pod owner is {kind or 'Unknown'}, not Deployment/StatefulSet; cannot rollout restart.",
+            "fallback_strategy": "delete_pod",
+        }
 
     return {
         "strategy": "rollout_restart",
@@ -149,7 +197,7 @@ def _plan_delete_pod(
     namespace: str,
     pod: dict[str, Any],
 ) -> dict[str, Any]:
-    """Plan force-deleting the pod with grace period for controller recreation."""
+    """Plan deleting the pod with grace period for controller recreation."""
     pod_name = pod.get("metadata", {}).get("name")
     grace_period = 30
 
@@ -174,9 +222,9 @@ def _plan_delete_pod(
     }
 
 
-def _find_owner_reference(pod: dict[str, Any]) -> dict[str, Any] | None:
+def _find_owner_reference(obj: dict[str, Any]) -> dict[str, Any] | None:
     """Find the first Deployment or StatefulSet owner reference."""
-    owner_refs = pod.get("metadata", {}).get("ownerReferences", [])
+    owner_refs = obj.get("metadata", {}).get("ownerReferences", [])
     for ref in owner_refs:
         if ref.get("kind") in ("Deployment", "StatefulSet"):
             return ref
