@@ -1,101 +1,91 @@
-"""Remediation tools for deprecated Kubernetes API migration during upgrades.
-
-Strategy:
-- plan_migration: Analyze deprecated APIs in use, provide kubectl commands and
-  manifests for safe migration. READ-ONLY planning; no cluster writes.
-
-The actual migration is opt-in: user reviews plan, then separately invokes
-kubectl apply with provided manifests.
-
-This tool is primarily informational to guide the upgrade process.
-"""
+"""Read-only planning tools for Kubernetes deprecated API migrations."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from tools.common import (
-    run_kubectl_json,
-)
+from tools.common import run_kubectl_json
+
+
+# Kubernetes 1.32 has one API-version removal. Older API versions listed in the
+# previous implementation were already removed before a 1.29 source cluster,
+# so they cannot be blockers for the project's 1.29 -> 1.32 upgrade.
+DEPRECATED_APIS_BY_TARGET: dict[str, tuple[str, ...]] = {
+    "1.31": (),
+    "1.32": ("flowcontrol.apiserver.k8s.io/v1beta3",),
+}
+
+API_MIGRATIONS: dict[tuple[str, str], dict[str, Any]] = {
+    ("flowcontrol.apiserver.k8s.io", "v1beta3"): {
+        "resources": (
+            ("flowschemas", "FlowSchema"),
+            ("prioritylevelconfigurations", "PriorityLevelConfiguration"),
+        ),
+        "new_version": "flowcontrol.apiserver.k8s.io/v1",
+    },
+}
 
 
 def aks_remediate_deprecated_apis(
     subscription_id: str,
     resource_group: str,
     cluster_name: str,
-    target_k8s_version: str = "1.31",
+    target_k8s_version: str = "1.32",
     check_mode: str = "quick",
 ) -> dict[str, Any]:
-    """Plan migration of deprecated Kubernetes APIs for the target version.
+    """Plan migration of deprecated APIs for the requested target version.
 
-    This tool is READ-ONLY: it provides a migration plan with kubectl commands
-    and manifests. No cluster writes occur. User reviews the plan and decides
-    whether to proceed with kubectl apply.
-
-    Target K8s versions map to removed API groups:
-    - 1.31: removes beta.storage.k8s.io (CSIStorageCapacity moved to v1)
-    - 1.31: removes autoscaling/v2beta1 (moved to v2)
-    - 1.31: removes policy/v1beta1 (moved to v1)
-
-    Returns a detailed plan with:
-    - Deprecated resources found in the cluster
-    - kubectl commands to migrate them
-    - New manifests with updated apiVersion
+    The tool is deliberately READ-ONLY. It detects resources through the
+    deprecated API endpoint while that endpoint is still served, then returns
+    export/conversion/apply guidance. It never calls a write operation.
     """
     if check_mode not in ("quick", "full"):
         raise ValueError(f"Unknown check_mode: {check_mode!r}")
 
-    deprecated_apis_by_version = {
-        "1.31": [
-            "beta.storage.k8s.io/v1beta1",
-            "autoscaling/v2beta1",
-            "policy/v1beta1",
-            "networking.k8s.io/v1beta1",
-            "rbac.authorization.k8s.io/v1beta1",
-        ],
-        "1.32": [
-            "batch/v1beta1",
-            "discovery.k8s.io/v1beta1",
-        ],
-    }
-
-    deprecated_for_target = deprecated_apis_by_version.get(target_k8s_version, [])
+    deprecated_for_target = DEPRECATED_APIS_BY_TARGET.get(target_k8s_version)
+    if deprecated_for_target is None:
+        return {
+            "status": "unsupported_target",
+            "target_k8s_version": target_k8s_version,
+            "message": f"No deprecated API removal map is defined for Kubernetes {target_k8s_version}.",
+        }
 
     if not deprecated_for_target:
         return {
             "status": "no_action",
-            "message": f"No deprecated APIs known for K8s {target_k8s_version}.",
+            "target_k8s_version": target_k8s_version,
+            "message": f"No API-version removals are scheduled for Kubernetes {target_k8s_version}.",
         }
 
-    plan_steps = []
-
-    for api_group_version in deprecated_for_target:
-        plan_steps.append(
-            _plan_api_migration_step(
-                subscription_id, resource_group, cluster_name, api_group_version
-            )
+    migration_steps: list[dict[str, Any]] = []
+    for deprecated_api in deprecated_for_target:
+        step = _plan_api_migration_step(
+            subscription_id, resource_group, cluster_name, deprecated_api
         )
+        if not step.get("no_resources"):
+            migration_steps.append(step)
 
-    found_resources = [s for s in plan_steps if not s.get("no_resources")]
-    if not found_resources:
+    if not migration_steps:
         return {
             "status": "no_action",
-            "message": f"No resources using deprecated APIs found in cluster for {target_k8s_version}.",
+            "target_k8s_version": target_k8s_version,
+            "message": f"No resources currently served through APIs removed in Kubernetes {target_k8s_version}.",
         }
 
     return {
         "status": "plan",
         "target_k8s_version": target_k8s_version,
-        "migration_steps": found_resources,
-        "total_resources_to_migrate": sum(s.get("resource_count", 0) for s in found_resources),
+        "migration_steps": migration_steps,
+        "total_resources_to_migrate": sum(
+            step["resource_count"] for step in migration_steps
+        ),
         "instructions": [
-            "1. Review each migration_step below.",
-            "2. Run the listed 'export_command' to download current manifests.",
-            "3. Update apiVersion to the new version listed in 'new_apiVersion'.",
-            "4. Run the 'apply_command' to update resources in the cluster.",
-            "5. Verify resources are healthy before proceeding with upgrade.",
+            "1. Back up each affected resource using the supplied export command.",
+            "2. Update the manifest apiVersion to the supplied new_apiVersion and review any version-specific field changes.",
+            "3. Apply the reviewed manifest with kubectl apply -f <converted-manifest>.",
+            "4. Verify the resource is healthy using the supplied verification command.",
         ],
-        "warning": "This is a READ-ONLY plan. No cluster changes made. Actual migration is opt-in via kubectl apply.",
+        "warning": "READ-ONLY: this tool never patches, applies, deletes, or otherwise mutates cluster resources.",
     }
 
 
@@ -105,74 +95,78 @@ def _plan_api_migration_step(
     cluster_name: str,
     deprecated_api: str,
 ) -> dict[str, Any]:
-    """Plan migration for one deprecated API group/version."""
-    # Parse deprecated_api, e.g., "autoscaling/v2beta1" → kind in autoscaling
+    """Detect resources served by one deprecated API and build safe guidance."""
     parts = deprecated_api.split("/")
-    if len(parts) == 2:
-        group, version = parts
-    else:
+    if len(parts) != 2:
         return {"no_resources": True, "api": deprecated_api}
 
-    api_mapping = {
-        ("autoscaling", "v2beta1"): {
-            "kinds": ["HorizontalPodAutoscaler"],
-            "new_version": "autoscaling/v2",
-        },
-        ("policy", "v1beta1"): {
-            "kinds": ["PodDisruptionBudget", "Eviction"],
-            "new_version": "policy/v1",
-        },
-        ("beta.storage.k8s.io", "v1beta1"): {
-            "kinds": ["CSIStorageCapacity"],
-            "new_version": "storage.k8s.io/v1",
-        },
-        ("networking.k8s.io", "v1beta1"): {
-            "kinds": ["NetworkPolicy", "Ingress"],
-            "new_version": "networking.k8s.io/v1",
-        },
-        ("rbac.authorization.k8s.io", "v1beta1"): {
-            "kinds": ["ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding"],
-            "new_version": "rbac.authorization.k8s.io/v1",
-        },
-        ("batch", "v1beta1"): {
-            "kinds": ["CronJob"],
-            "new_version": "batch/v1",
-        },
-        ("discovery.k8s.io", "v1beta1"): {
-            "kinds": ["EndpointSlice"],
-            "new_version": "discovery.k8s.io/v1",
-        },
-    }
-
-    mapping = api_mapping.get((group, version))
-    if not mapping:
+    group, version = parts
+    mapping = API_MIGRATIONS.get((group, version))
+    if mapping is None:
         return {"no_resources": True, "api": deprecated_api}
 
-    query_result = run_kubectl_json(
-        subscription_id,
-        resource_group,
-        cluster_name,
-        f"api-resources --api-group={group} --cached",
-    )
-
+    migration_commands: list[dict[str, Any]] = []
     resource_count = 0
-    migration_commands = []
 
-    for kind in mapping["kinds"]:
-        migration_commands.append({
-            "kind": kind,
-            "export_command": f"kubectl get {kind.lower()} -A -o yaml > {kind.lower()}_backup.yaml",
-            "migrate_command": f"kubectl get {kind.lower()} -A --no-headers -o custom-columns=NAME:.metadata.name,NAMESPACE:.metadata.namespace | while read name ns; do kubectl patch {kind.lower()} $name -n $ns -p '{{\"apiVersion\":\"{mapping['new_version']}\"}}' --type=merge; done",
-            "verify_command": f"kubectl get {kind.lower()} -A -o jsonpath='{{..apiVersion}}' | sort | uniq",
-        })
-        resource_count += 1
+    for resource_name, kind in mapping["resources"]:
+        # Explicitly query the deprecated endpoint. A normal `kubectl get` would
+        # use the preferred API and therefore cannot prove that the deprecated
+        # API is still being served/used before the upgrade.
+        try:
+            payload = run_kubectl_json(
+                subscription_id,
+                resource_group,
+                cluster_name,
+                f"get {resource_name} -A --api-version={deprecated_api}",
+            )
+        except RuntimeError:
+            # The old endpoint is not served. Existing persisted objects are
+            # still accessible through the stable API, but there is no current
+            # deprecated-endpoint blocker to migrate on this cluster.
+            continue
+
+        items = payload.get("items", [])
+        if not items:
+            continue
+
+        resource_count += len(items)
+        safe_file = resource_name.replace("/", "_")
+        migration_commands.append(
+            {
+                "kind": kind,
+                "resource": resource_name,
+                "resource_count": len(items),
+                "export_command": (
+                    f"kubectl get {resource_name} -A --api-version={deprecated_api} "
+                    f"-o yaml > {safe_file}_v1beta3_backup.yaml"
+                ),
+                "new_apiVersion": mapping["new_version"],
+                "conversion_guidance": (
+                    "Review the exported manifest, change apiVersion to the new API version, "
+                    "remove server-generated metadata (for example resourceVersion, uid and "
+                    "managedFields), and review version-specific fields before applying."
+                ),
+                "apply_command": f"kubectl apply -f <reviewed-{safe_file}-manifest>.yaml",
+                "verify_command": f"kubectl get {resource_name} -A",
+                "resources": [
+                    {
+                        "name": item.get("metadata", {}).get("name"),
+                        "namespace": item.get("metadata", {}).get("namespace", "cluster-wide"),
+                    }
+                    for item in items[:20]
+                ],
+            }
+        )
+
+    if resource_count == 0:
+        return {"no_resources": True, "api": deprecated_api}
 
     return {
         "no_resources": False,
         "deprecated_api": deprecated_api,
         "new_apiVersion": mapping["new_version"],
         "resource_count": resource_count,
-        "kinds": mapping["kinds"],
+        "kinds": [entry[1] for entry in mapping["resources"]],
         "migration_commands": migration_commands,
     }
 
@@ -184,20 +178,22 @@ def aks_generate_deprecated_api_manifests(
     api_group: str,
     kind: str,
 ) -> dict[str, Any]:
-    """Generate migration manifests for a specific deprecated resource type.
+    """Inspect resources of a kind and report their currently served API versions.
 
-    Helper tool to export all resources of a kind and show their current
-    apiVersion + recommended new apiVersion for patching.
+    This helper is also READ-ONLY. It does not claim that changing apiVersion
+    in a live object is a valid patch operation; migration requires a reviewed
+    manifest using the replacement API.
     """
     from tools.common import validate_k8s_name
 
     validate_k8s_name(kind, "resource_kind")
+    validate_k8s_name(api_group, "api_group")
 
     result = run_kubectl_json(
         subscription_id,
         resource_group,
         cluster_name,
-        f"get {kind.lower()} -A -o json",
+        f"get {kind.lower()} -A",
     )
 
     resources = result.get("items", [])
@@ -208,17 +204,17 @@ def aks_generate_deprecated_api_manifests(
             "message": f"No {kind} resources found in cluster.",
         }
 
-    current_versions = set(
-        r.get("apiVersion") for r in resources if r.get("apiVersion")
+    current_versions = sorted(
+        {r.get("apiVersion") for r in resources if r.get("apiVersion")}
     )
 
     return {
         "status": "manifests_generated",
         "kind": kind,
+        "api_group": api_group,
         "resource_count": len(resources),
-        "current_versions": list(current_versions),
+        "current_versions": current_versions,
         "export_all_command": f"kubectl get {kind.lower()} -A -o yaml > {kind.lower()}_all.yaml",
-        "export_per_ns_command": f"for ns in $(kubectl get ns -o name); do kubectl get {kind.lower()} -n $ns -o yaml > {kind.lower()}_${{ns##*/}}.yaml; done",
         "resources": [
             {
                 "name": r.get("metadata", {}).get("name"),
@@ -227,5 +223,5 @@ def aks_generate_deprecated_api_manifests(
             }
             for r in resources[:10]
         ],
-        "note": "First 10 resources shown; use export commands for full manifest backup.",
+        "note": "First 10 resources shown; export the full manifest and review the replacement API before applying.",
     }
