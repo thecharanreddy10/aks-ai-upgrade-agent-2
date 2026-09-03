@@ -73,12 +73,11 @@ def require_remediation_approval(
     is_destructive: bool = False,
     confirm_destructive: bool = False,
 ) -> None:
-    """Enforce write gates for remediation tools.
+    """Enforce remediation write gates without an application-level approval token.
 
-    The ``approval_token`` parameter is retained for backwards compatibility with existing
-    remediation callers, but is no longer used as an application-level authorization gate.
-    Actual authorization comes from the explicit full-check/write gates and the MCP runtime's
-    Azure/Kubernetes identity.
+    ``approval_token`` is retained for backwards compatibility with existing remediation callers,
+    but it is not read or validated. Authorization comes from the explicit full-check/write gates
+    and the MCP runtime's Azure/Kubernetes identity.
     """
     if check_mode != "full":
         raise PermissionError("Remediation write operations require check_mode='full'.")
@@ -222,9 +221,9 @@ def run_kubectl_batch(
     for label, kubectl_args in queries.items():
         lines.append(f"RAW=$(kubectl {kubectl_args} -o json 2>/dev/null)")
         lines.append("CODE=$?")
-        lines.append(f"echo '===BEGIN:{label}===")
+        lines.append(f'echo "===BEGIN:{label}===")
         lines.append('echo "$RAW"')
-        lines.append(f"echo '===END:{label}:EXIT='$CODE'===")
+        lines.append(f'echo "===END:{label}:EXIT=$CODE===")
     script = "\n".join(lines)
 
     raw_output = run_kubectl_raw(subscription_id, resource_group, cluster_name, script)
