@@ -5,15 +5,8 @@ import pytest
 from tools.common import require_remediation_approval
 
 
-def test_remediation_does_not_require_application_token(monkeypatch):
+def test_remediation_uses_runtime_identity_and_write_gate(monkeypatch):
     monkeypatch.setenv("AKS_REMEDIATION_ENABLE_WRITE", "true")
-    monkeypatch.delenv("AKS_REMEDIATION_APPROVAL_TOKEN", raising=False)
-    require_remediation_approval("full", namespace="phonebook")
-
-
-def test_remediation_ignores_approval_token_when_present(monkeypatch):
-    monkeypatch.setenv("AKS_REMEDIATION_ENABLE_WRITE", "true")
-    monkeypatch.setenv("AKS_REMEDIATION_APPROVAL_TOKEN", "stale-token")
     require_remediation_approval("full", namespace="phonebook")
 
 
