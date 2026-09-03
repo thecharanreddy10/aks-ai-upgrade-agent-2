@@ -1,4 +1,4 @@
-"""Guardrail tests for the shared validators and the remediation approval gate."""
+"""Guardrail tests for the shared validators and remediation write gate."""
 
 from __future__ import annotations
 
@@ -66,58 +66,38 @@ def test_unprotected_namespace_passes():
     assert_namespace_not_protected("phonebook")
 
 
-def _enable_write(monkeypatch, token="s3cret"):
-    monkeypatch.setenv("AKS_REMEDIATION_ENABLE_WRITE", "true")
-    monkeypatch.setenv("AKS_REMEDIATION_APPROVAL_TOKEN", token)
-
-
 def test_approval_requires_full_check_mode(monkeypatch):
-    _enable_write(monkeypatch)
+    monkeypatch.setenv("AKS_REMEDIATION_ENABLE_WRITE", "true")
     with pytest.raises(PermissionError, match="check_mode='full'"):
-        require_remediation_approval("quick", "s3cret", "phonebook")
+        require_remediation_approval("quick", None, "phonebook")
 
 
 def test_approval_requires_write_env_gate(monkeypatch):
     monkeypatch.delenv("AKS_REMEDIATION_ENABLE_WRITE", raising=False)
-    monkeypatch.setenv("AKS_REMEDIATION_APPROVAL_TOKEN", "s3cret")
     with pytest.raises(PermissionError, match="AKS_REMEDIATION_ENABLE_WRITE"):
-        require_remediation_approval("full", "s3cret", "phonebook")
+        require_remediation_approval("full", None, "phonebook")
 
 
-def test_approval_fails_closed_when_token_env_unset(monkeypatch):
-    # The upgrade path historically allowed any token when the env var was unset; remediation must not.
+def test_write_passes_without_approval_token(monkeypatch):
     monkeypatch.setenv("AKS_REMEDIATION_ENABLE_WRITE", "true")
     monkeypatch.delenv("AKS_REMEDIATION_APPROVAL_TOKEN", raising=False)
-    with pytest.raises(PermissionError, match="not configured"):
-        require_remediation_approval("full", "anything", "phonebook")
+    require_remediation_approval("full", None, "phonebook")
 
 
-@pytest.mark.parametrize("supplied", [None, "", "wrong-token"])
-def test_approval_rejects_bad_tokens(monkeypatch, supplied):
-    _enable_write(monkeypatch)
-    with pytest.raises(PermissionError, match="Invalid approval token"):
-        require_remediation_approval("full", supplied, "phonebook")
-
-
-def test_approval_rejects_protected_namespace(monkeypatch):
-    _enable_write(monkeypatch)
+def test_protected_namespace_still_rejected(monkeypatch):
+    monkeypatch.setenv("AKS_REMEDIATION_ENABLE_WRITE", "true")
     with pytest.raises(PermissionError, match="protected"):
-        require_remediation_approval("full", "s3cret", "kube-system")
+        require_remediation_approval("full", None, "kube-system")
 
 
 def test_destructive_requires_explicit_confirmation(monkeypatch):
-    _enable_write(monkeypatch)
+    monkeypatch.setenv("AKS_REMEDIATION_ENABLE_WRITE", "true")
     with pytest.raises(PermissionError, match="confirm_destructive"):
-        require_remediation_approval("full", "s3cret", "phonebook", is_destructive=True)
+        require_remediation_approval("full", None, "phonebook", is_destructive=True)
 
 
 def test_destructive_passes_with_confirmation(monkeypatch):
-    _enable_write(monkeypatch)
+    monkeypatch.setenv("AKS_REMEDIATION_ENABLE_WRITE", "true")
     require_remediation_approval(
-        "full", "s3cret", "phonebook", is_destructive=True, confirm_destructive=True
+        "full", None, "phonebook", is_destructive=True, confirm_destructive=True
     )
-
-
-def test_approval_passes_when_all_gates_satisfied(monkeypatch):
-    _enable_write(monkeypatch)
-    require_remediation_approval("full", "s3cret", "phonebook")

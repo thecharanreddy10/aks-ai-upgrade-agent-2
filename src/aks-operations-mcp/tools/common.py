@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import secrets
 from typing import Any
 
 from azure.identity import DefaultAzureCredential
@@ -52,7 +51,7 @@ def validate_k8s_name(value: str, kind: str = "resource") -> None:
     """Reject anything that isn't a valid Kubernetes object name (RFC 1123 subdomain).
 
     Same shell-injection concern as validate_namespace: object names are interpolated into
-    kubectl commands executed through AKS Run Command.
+    kubectl commands executed via AKS Run Command.
     """
     if not isinstance(value, str) or len(value) > 253 or not _K8S_NAME_RE.match(value):
         raise ValueError(f"Invalid Kubernetes {kind} name: {value!r}")
@@ -74,12 +73,11 @@ def require_remediation_approval(
     is_destructive: bool = False,
     confirm_destructive: bool = False,
 ) -> None:
-    """Enforce write gates for remediation tools.
+    """Enforce write gates for remediation tools without an application-level token.
 
-    The approval token is intentionally resolved server-side when the caller does not supply one.
-    This lets an agent request an approved remediation without receiving the secret token itself.
-    The runtime still fails closed unless AKS_REMEDIATION_APPROVAL_TOKEN is configured and
-    AKS_REMEDIATION_ENABLE_WRITE=true.
+    The ``approval_token`` parameter remains only for backwards compatibility with existing
+    callers. It is not read or validated. Authorization comes from the explicit full-check/write
+    gates and the MCP runtime's Azure/Kubernetes identity.
     """
     if check_mode != "full":
         raise PermissionError("Remediation write operations require check_mode='full'.")
@@ -88,18 +86,6 @@ def require_remediation_approval(
         raise PermissionError(
             "Remediation write operations are disabled. Set AKS_REMEDIATION_ENABLE_WRITE=true to enable."
         )
-
-    expected_token = os.getenv("AKS_REMEDIATION_APPROVAL_TOKEN")
-    if not expected_token:
-        raise PermissionError(
-            "AKS_REMEDIATION_APPROVAL_TOKEN is not configured; remediation cannot be approved."
-        )
-
-    # Never require the LLM/agent to know the secret. If a caller supplies a token, validate it;
-    # otherwise use the server-configured token as the service-side approval.
-    candidate_token = approval_token or expected_token
-    if not secrets.compare_digest(candidate_token, expected_token):
-        raise PermissionError("Invalid approval token for remediation execution.")
 
     assert_namespace_not_protected(namespace)
 
@@ -153,19 +139,15 @@ def _extract_json_payload(output: str) -> str:
     """Extract the first JSON document from mixed command output."""
     first_obj = output.find("{")
     first_arr = output.find("[")
-
     candidates = [idx for idx in (first_obj, first_arr) if idx != -1]
     if not candidates:
         raise ValueError("No JSON payload found in command output.")
-
     start = min(candidates)
     end_obj = output.rfind("}")
     end_arr = output.rfind("]")
     end = max(end_obj, end_arr)
-
     if end < start:
         raise ValueError("Invalid JSON boundaries in command output.")
-
     return output[start : end + 1]
 
 
@@ -235,9 +217,9 @@ def run_kubectl_batch(
     for label, kubectl_args in queries.items():
         lines.append(f"RAW=$(kubectl {kubectl_args} -o json 2>/dev/null)")
         lines.append("CODE=$?")
-        lines.append(f"echo '===BEGIN:{label}==='")
+        lines.append("echo '===BEGIN:" + label + "==='" )
         lines.append('echo "$RAW"')
-        lines.append(f"echo '===END:{label}:EXIT='$CODE'===")
+        lines.append("echo '===END:" + label + ":EXIT='$CODE'==='" )
     script = "\n".join(lines)
 
     raw_output = run_kubectl_raw(subscription_id, resource_group, cluster_name, script)
