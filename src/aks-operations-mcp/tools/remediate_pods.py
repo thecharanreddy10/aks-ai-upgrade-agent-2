@@ -128,8 +128,9 @@ def _resolve_workload_owner(
         return None
 
     replica_set_name = replica_set_ref.get("name")
-    if not replica_set_name or not validate_k8s_name(replica_set_name, "ReplicaSet"):
+    if not replica_set_name:
         return None
+    validate_k8s_name(replica_set_name, "ReplicaSet")
 
     replica_set = run_kubectl_json(
         subscription_id,
