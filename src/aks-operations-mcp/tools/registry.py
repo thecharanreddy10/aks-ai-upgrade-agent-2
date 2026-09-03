@@ -21,7 +21,7 @@ from tools.remediate_deprecated_apis import (
     aks_remediate_deprecated_apis,
 )
 from tools.remediate_nodes import aks_remediate_node
-from tools.remediate_pdb import aks_remediate_pdb
+from tools.remediate_pdb import aks_remediate_pdb, aks_rollback_pdb_remediation
 from tools.remediate_pods import aks_remediate_pods
 from tools.remediate_storage import aks_remediate_storage
 from tools.storage import aks_check_storage
@@ -40,6 +40,7 @@ ALL_TOOLS: tuple[Callable[..., dict[str, Any]], ...] = (
     aks_validate_upgrade_readiness,
     aks_upgrade_node_pool,
     aks_remediate_pdb,
+    aks_rollback_pdb_remediation,
     aks_remediate_pods,
     aks_remediate_node,
     aks_remediate_storage,
