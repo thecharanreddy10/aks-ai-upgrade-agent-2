@@ -15,9 +15,6 @@ try:
 except ImportError:
     from azure.mgmt.containerservice.models import RunCommandRequest
 
-# Namespaces whose objects must never be mutated by a remediation tool. `aks-command` holds the
-# transient pods AKS Run Command creates for our own queries, so it is both infrastructure and a
-# source of false-positive "unhealthy pod" findings.
 PROTECTED_NAMESPACES = frozenset(
     {
         "kube-system",
@@ -30,7 +27,6 @@ PROTECTED_NAMESPACES = frozenset(
     }
 )
 
-# Pods in these namespaces are artifacts of this tool's own operation, not real workload failures.
 INFRA_ARTIFACT_NAMESPACES = frozenset({"aks-command"})
 
 _NAMESPACE_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
@@ -38,21 +34,13 @@ _K8S_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*
 
 
 def validate_namespace(namespace: str) -> None:
-    """Reject anything that isn't a valid Kubernetes namespace name (RFC 1123 label).
-
-    namespace ends up embedded in a shell command run via AKS Run Command, so this also
-    prevents shell-metacharacter injection via this parameter.
-    """
+    """Reject anything that isn't a valid Kubernetes namespace name (RFC 1123 label)."""
     if not isinstance(namespace, str) or len(namespace) > 63 or not _NAMESPACE_RE.match(namespace):
         raise ValueError(f"Invalid Kubernetes namespace: {namespace!r}")
 
 
 def validate_k8s_name(value: str, kind: str = "resource") -> None:
-    """Reject anything that isn't a valid Kubernetes object name (RFC 1123 subdomain).
-
-    Same shell-injection concern as validate_namespace: object names are interpolated into
-    kubectl commands executed via AKS Run Command.
-    """
+    """Reject anything that isn't a valid Kubernetes object name (RFC 1123 subdomain)."""
     if not isinstance(value, str) or len(value) > 253 or not _K8S_NAME_RE.match(value):
         raise ValueError(f"Invalid Kubernetes {kind} name: {value!r}")
 
@@ -68,16 +56,14 @@ def assert_namespace_not_protected(namespace: str | None) -> None:
 
 def require_remediation_approval(
     check_mode: str,
-    approval_token: str | None,
     namespace: str | None = None,
     is_destructive: bool = False,
     confirm_destructive: bool = False,
 ) -> None:
-    """Enforce write gates for remediation tools without an application-level token.
+    """Enforce write guardrails without an application-level approval token.
 
-    The ``approval_token`` parameter remains only for backwards compatibility with existing
-    callers. It is not read or validated. Authorization comes from the explicit full-check/write
-    gates and the MCP runtime's Azure/Kubernetes identity.
+    Authorization is provided by the explicit full-check/write gates and the MCP runtime's
+    Azure/Kubernetes identity. No secret token is accepted, read, or validated here.
     """
     if check_mode != "full":
         raise PermissionError("Remediation write operations require check_mode='full'.")
@@ -96,11 +82,7 @@ def require_remediation_approval(
 
 
 def get_container_service_client(subscription_id: str) -> ContainerServiceClient:
-    """Create a ContainerServiceClient using managed identity/default credentials.
-
-    If AZURE_CLIENT_ID is set, it pins DefaultAzureCredential to that user-assigned
-    identity so resolution is unambiguous if more than one identity is ever attached.
-    """
+    """Create a ContainerServiceClient using managed identity/default credentials."""
     client_id = os.getenv("AZURE_CLIENT_ID")
     credential = DefaultAzureCredential(managed_identity_client_id=client_id) if client_id else DefaultAzureCredential()
     return ContainerServiceClient(credential=credential, subscription_id=subscription_id)
@@ -182,14 +164,7 @@ def run_kubectl_raw(
     cluster_name: str,
     command: str,
 ) -> str:
-    """Run an arbitrary shell/kubectl command through AKS run command; return raw log text as-is.
-
-    Unlike run_kubectl_json, this does not assume `-o json` output and performs no JSON parsing -
-    intended for compact, custom-formatted batched queries (e.g. deprecated API detection) where
-    the caller controls the exact output format and needs a single Run Command invocation to cover
-    multiple checks instead of one invocation per check (AKS Run Command has ~25-35s per-invocation
-    overhead, so batching is the primary lever for reducing wall-clock time).
-    """
+    """Run an arbitrary shell/kubectl command through AKS run command."""
     raw_logs = _execute_run_command(subscription_id, resource_group, cluster_name, command)
     if not raw_logs:
         raise RuntimeError("AKS run command did not return logs output.")
@@ -205,19 +180,12 @@ def run_kubectl_batch(
     cluster_name: str,
     queries: dict[str, str],
 ) -> dict[str, tuple[int, str]]:
-    """Run multiple `kubectl get ... -o json` queries in a SINGLE AKS Run Command invocation.
-
-    `queries` maps a caller-chosen label to kubectl arguments (without `-o json`, which is added
-    automatically). Returns {label: (exit_code, raw_json_text)}. Each query's kubectl exit code is
-    captured via command substitution (never through a pipe, which would lose it), so callers can
-    distinguish a genuine query failure (non-zero exit) from a valid empty result - a failed query
-    must be treated as an explicit error, never as an empty/healthy result.
-    """
+    """Run multiple `kubectl get ... -o json` queries in a single AKS Run Command invocation."""
     lines: list[str] = []
     for label, kubectl_args in queries.items():
         lines.append(f"RAW=$(kubectl {kubectl_args} -o json 2>/dev/null)")
         lines.append("CODE=$?")
-        lines.append("echo '===BEGIN:" + label + "==='" )
+        lines.append("echo '===BEGIN:" + label + "==='")
         lines.append('echo "$RAW"')
         lines.append("echo '===END:" + label + ":EXIT='$CODE'==='" )
     script = "\n".join(lines)
