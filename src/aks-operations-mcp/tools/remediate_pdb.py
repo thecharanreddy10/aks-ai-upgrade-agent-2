@@ -92,6 +92,123 @@ def aks_remediate_pdb(
     )
 
 
+def aks_rollback_pdb_remediation(
+    subscription_id: str,
+    resource_group: str,
+    cluster_name: str,
+    namespace: str,
+    pdb_name: str,
+    strategy: str,
+    original_min_available: int | str | None = None,
+    original_max_unavailable: int | str | None = None,
+    workload_kind: str | None = None,
+    workload_name: str | None = None,
+    original_replicas: int | None = None,
+    dry_run: bool = True,
+    approval_token: str | None = None,
+    check_mode: str = "full",
+) -> dict[str, Any]:
+    """Restore the exact state captured before a PDB remediation.
+
+    The normal remediation response exposes rollback commands, but returning a command
+    is not the same as executing it. This tool provides an explicit, auditable rollback
+    operation that the agent can call after a remediation, using the original values
+    captured in the remediation plan. It can restore the PDB and, for scale remediation,
+    the protected workload replica count.
+    """
+    validate_namespace(namespace)
+    validate_k8s_name(pdb_name, "pdb")
+    assert_namespace_not_protected(namespace)
+
+    if strategy not in ("scale_workload_up", "relax_pdb"):
+        raise ValueError(f"Unknown strategy: {strategy!r}")
+
+    if workload_kind is not None and workload_kind not in ("Deployment", "StatefulSet"):
+        raise ValueError(f"Unsupported workload kind for rollback: {workload_kind!r}")
+    if original_replicas is not None and original_replicas < 0:
+        raise ValueError("original_replicas must be non-negative")
+    if strategy == "scale_workload_up" and (not workload_kind or not workload_name or original_replicas is None):
+        raise ValueError(
+            "scale_workload_up rollback requires workload_kind, workload_name, and original_replicas"
+        )
+    if strategy == "relax_pdb" and workload_kind is not None:
+        raise ValueError("relax_pdb rollback does not accept workload parameters")
+
+    pdb = _fetch_pdb(subscription_id, resource_group, cluster_name, namespace, pdb_name)
+    if not pdb:
+        raise ValueError(
+            f"PDB {namespace}/{pdb_name} not found or could not be queried."
+        )
+
+    steps: list[dict[str, Any]] = []
+    if strategy == "scale_workload_up":
+        assert workload_kind is not None and workload_name is not None and original_replicas is not None
+        resource = "deployment" if workload_kind == "Deployment" else "statefulset"
+        steps.append({
+            "type": "rollback_scale",
+            "kind": workload_kind,
+            "name": workload_name,
+            "namespace": namespace,
+            "replicas": original_replicas,
+            "rollback_command": f"kubectl scale {resource} {workload_name} -n {namespace} --replicas={original_replicas}",
+        })
+    else:
+        steps.append({
+            "type": "rollback_patch",
+            "kind": "PodDisruptionBudget",
+            "name": pdb_name,
+            "namespace": namespace,
+            "rollback_command": _restore_pdb_command(
+                pdb_name,
+                namespace,
+                original_min_available,
+                original_max_unavailable,
+            ),
+        })
+
+    if dry_run:
+        return {
+            "status": "dry_run",
+            "strategy": strategy,
+            "pdb": {"namespace": namespace, "name": pdb_name},
+            "steps": steps,
+            "message": "Rollback plan only; no cluster changes.",
+        }
+
+    require_remediation_approval(check_mode, approval_token, namespace)
+
+    applied_changes: list[dict[str, Any]] = []
+    try:
+        for step in steps:
+            raw_logs = run_kubectl_raw(
+                subscription_id,
+                resource_group,
+                cluster_name,
+                step["rollback_command"],
+            )
+            applied_changes.append({
+                "type": step["type"],
+                "kind": step["kind"],
+                "name": step["name"],
+                "output": raw_logs[:200],
+            })
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "status": "failed",
+            "strategy": strategy,
+            "reason": str(exc),
+            "applied_changes": applied_changes,
+        }
+
+    return {
+        "status": "rolled_back",
+        "strategy": strategy,
+        "pdb": {"namespace": namespace, "name": pdb_name},
+        "applied_changes": applied_changes,
+        "message": "PDB remediation rollback applied successfully. Verify the restored PDB/workload state.",
+    }
+
+
 def _fetch_pdb(
     subscription_id: str,
     resource_group: str,
@@ -238,24 +355,22 @@ def _plan_relax_pdb(
 def _restore_pdb_command(
     pdb_name: str,
     namespace: str,
-    original_min_available: int | None,
-    original_max_unavailable: int | None,
+    original_min_available: int | str | None,
+    original_max_unavailable: int | str | None,
 ) -> str:
     """Generate the exact kubectl patch command to restore the original PDB spec."""
-    spec_parts: list[str] = []
-    if original_min_available is not None:
-        spec_parts.append(f'"minAvailable":{original_min_available}')
-    else:
-        spec_parts.append('"minAvailable":null')
-    if original_max_unavailable is not None:
-        spec_parts.append(f'"maxUnavailable":{original_max_unavailable}')
-    else:
-        spec_parts.append('"maxUnavailable":null')
+    import json
 
-    patch_json = "{" + ",".join(spec_parts) + "}"
+    patch = {
+        "spec": {
+            "minAvailable": original_min_available,
+            "maxUnavailable": original_max_unavailable,
+        }
+    }
+    patch_json = json.dumps(patch, separators=(",", ":"))
     return (
-        f'kubectl patch pdb {pdb_name} -n {namespace} --type=merge -p '
-        f'\'{{"spec":{patch_json}}}\''
+        f"kubectl patch pdb {pdb_name} -n {namespace} --type=merge -p "
+        f"'{patch_json}'"
     )
 
 
