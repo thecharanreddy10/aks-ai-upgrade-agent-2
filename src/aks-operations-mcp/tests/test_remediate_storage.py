@@ -102,7 +102,7 @@ def test_plan_cleanup_pvc_no_pvcs_returns_no_action(monkeypatch):
     plan = _plan_cleanup_pvc(*CLUSTER_ARGS, "default", None)
 
     assert plan.get("status") == "no_action"
-    assert "No PVCs" in plan.get("message", "")
+    assert plan.get("message") == "No terminating, unbound PVCs found in default."
 
 
 def test_plan_cleanup_pvc_finds_terminating_pvcs(monkeypatch):
