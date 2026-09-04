@@ -31,7 +31,6 @@ def aks_remediate_pdb(
     pdb_name: str,
     strategy: str = "scale_workload_up",
     dry_run: bool = True,
-    approval_token: str | None = None,
     check_mode: str = "full",
 ) -> dict[str, Any]:
     """Execute a PDB remediation plan to allow disruptions during upgrade.
@@ -42,9 +41,6 @@ def aks_remediate_pdb(
 
     Returns a plan with exact kubectl commands, rollback procedure, and post-apply
     verification steps. No cluster writes unless dry_run=False + approval gates pass.
-
-    The server resolves the approval token from its protected environment when the
-    caller does not provide one, so the agent never needs to know the secret.
     """
     validate_namespace(namespace)
     validate_k8s_name(pdb_name, "pdb")
@@ -79,7 +75,7 @@ def aks_remediate_pdb(
             "message": "Plan only; no cluster changes. Pass dry_run=False to apply when remediation writes are enabled.",
         }
 
-    require_remediation_approval(check_mode, approval_token, namespace)
+    require_remediation_approval(check_mode, namespace)
 
     return _apply_plan(
         subscription_id,
@@ -105,7 +101,6 @@ def aks_rollback_pdb_remediation(
     workload_name: str | None = None,
     original_replicas: int | None = None,
     dry_run: bool = True,
-    approval_token: str | None = None,
     check_mode: str = "full",
 ) -> dict[str, Any]:
     """Restore the exact state captured before a PDB remediation.
@@ -175,7 +170,7 @@ def aks_rollback_pdb_remediation(
             "message": "Rollback plan only; no cluster changes.",
         }
 
-    require_remediation_approval(check_mode, approval_token, namespace)
+    require_remediation_approval(check_mode, namespace)
 
     applied_changes: list[dict[str, Any]] = []
     try:

@@ -68,17 +68,11 @@ def assert_namespace_not_protected(namespace: str | None) -> None:
 
 def require_remediation_approval(
     check_mode: str,
-    approval_token: str | None,
     namespace: str | None = None,
     is_destructive: bool = False,
     confirm_destructive: bool = False,
 ) -> None:
-    """Enforce write gates for remediation tools without an application-level token.
-
-    The ``approval_token`` parameter remains only for backwards compatibility with existing
-    callers. It is not read or validated. Authorization comes from the explicit full-check/write
-    gates and the MCP runtime's Azure/Kubernetes identity.
-    """
+    """Enforce write gates for remediation tools."""
     if check_mode != "full":
         raise PermissionError("Remediation write operations require check_mode='full'.")
 

@@ -69,35 +69,34 @@ def test_unprotected_namespace_passes():
 def test_approval_requires_full_check_mode(monkeypatch):
     monkeypatch.setenv("AKS_REMEDIATION_ENABLE_WRITE", "true")
     with pytest.raises(PermissionError, match="check_mode='full'"):
-        require_remediation_approval("quick", None, "phonebook")
+        require_remediation_approval("quick", "phonebook")
 
 
 def test_approval_requires_write_env_gate(monkeypatch):
     monkeypatch.delenv("AKS_REMEDIATION_ENABLE_WRITE", raising=False)
     with pytest.raises(PermissionError, match="AKS_REMEDIATION_ENABLE_WRITE"):
-        require_remediation_approval("full", None, "phonebook")
+        require_remediation_approval("full", "phonebook")
 
 
-def test_write_passes_without_approval_token(monkeypatch):
+def test_write_passes_when_gates_are_satisfied(monkeypatch):
     monkeypatch.setenv("AKS_REMEDIATION_ENABLE_WRITE", "true")
-    monkeypatch.delenv("AKS_REMEDIATION_APPROVAL_TOKEN", raising=False)
-    require_remediation_approval("full", None, "phonebook")
+    require_remediation_approval("full", "phonebook")
 
 
 def test_protected_namespace_still_rejected(monkeypatch):
     monkeypatch.setenv("AKS_REMEDIATION_ENABLE_WRITE", "true")
     with pytest.raises(PermissionError, match="protected"):
-        require_remediation_approval("full", None, "kube-system")
+        require_remediation_approval("full", "kube-system")
 
 
 def test_destructive_requires_explicit_confirmation(monkeypatch):
     monkeypatch.setenv("AKS_REMEDIATION_ENABLE_WRITE", "true")
     with pytest.raises(PermissionError, match="confirm_destructive"):
-        require_remediation_approval("full", None, "phonebook", is_destructive=True)
+        require_remediation_approval("full", "phonebook", is_destructive=True)
 
 
 def test_destructive_passes_with_confirmation(monkeypatch):
     monkeypatch.setenv("AKS_REMEDIATION_ENABLE_WRITE", "true")
     require_remediation_approval(
-        "full", None, "phonebook", is_destructive=True, confirm_destructive=True
+        "full", "phonebook", is_destructive=True, confirm_destructive=True
     )

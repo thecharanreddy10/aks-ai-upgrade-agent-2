@@ -28,7 +28,6 @@ def aks_remediate_node(
     node_name: str,
     strategy: str = "drain_node",
     dry_run: bool = True,
-    approval_token: str | None = None,
     check_mode: str = "quick",
 ) -> dict[str, Any]:
     """Execute a node remediation plan to unblock upgrade-readiness issues.
@@ -40,8 +39,6 @@ def aks_remediate_node(
 
     Returns a plan with exact kubectl commands and rollback procedure.
     No cluster writes unless dry_run=False and the full write gate passes.
-    ``approval_token`` is retained only for backwards compatibility; the shared gate does not
-    validate or require an application-level token.
     """
     validate_k8s_name(node_name, "node")
 
@@ -66,7 +63,7 @@ def aks_remediate_node(
             "message": "Plan only; no cluster changes. Pass dry_run=False with check_mode='full' to apply.",
         }
 
-    require_remediation_approval(check_mode, approval_token, namespace=None)
+    require_remediation_approval(check_mode, namespace=None)
 
     return _apply_plan(
         subscription_id,

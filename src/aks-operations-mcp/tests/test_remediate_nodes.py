@@ -131,7 +131,6 @@ def test_dry_run_drain_returns_plan_without_execution(monkeypatch):
 
     assert result["status"] == "dry_run"
     assert "plan" in result
-    assert "approval_token" not in result["message"]
 
 
 def test_dry_run_restart_returns_plan_without_execution(monkeypatch):
@@ -153,7 +152,7 @@ def test_dry_run_restart_returns_plan_without_execution(monkeypatch):
     assert "plan" in result
 
 
-def test_no_approval_token_required_when_write_gate_enabled(monkeypatch):
+def test_write_succeeds_when_write_gate_is_enabled(monkeypatch):
     monkeypatch.setenv("AKS_REMEDIATION_ENABLE_WRITE", "true")
     monkeypatch.setattr(remediate_nodes, "run_kubectl_json", lambda *_a, **_k: NODE)
     commands = []
@@ -169,7 +168,6 @@ def test_no_approval_token_required_when_write_gate_enabled(monkeypatch):
         NODE_NAME,
         strategy="drain_node",
         dry_run=False,
-        approval_token=None,
         check_mode="full",
     )
 

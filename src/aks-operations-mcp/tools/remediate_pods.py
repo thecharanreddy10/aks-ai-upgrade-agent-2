@@ -30,7 +30,6 @@ def aks_remediate_pods(
     pod_name: str,
     strategy: str = "rollout_restart",
     dry_run: bool = True,
-    approval_token: str | None = None,
     check_mode: str = "quick",
 ) -> dict[str, Any]:
     """Execute a pod remediation plan to unstick unhealthy/pending pods during upgrade.
@@ -69,10 +68,10 @@ def aks_remediate_pods(
             "strategy": strategy,
             "pod": {"namespace": namespace, "name": pod_name},
             "plan": plan,
-            "message": "Plan only; no cluster changes. Pass dry_run=False + approval_token to apply.",
+            "message": "Plan only; no cluster changes. Pass dry_run=False to apply.",
         }
 
-    require_remediation_approval(check_mode, approval_token, namespace)
+    require_remediation_approval(check_mode, namespace)
 
     return _apply_plan(
         subscription_id,

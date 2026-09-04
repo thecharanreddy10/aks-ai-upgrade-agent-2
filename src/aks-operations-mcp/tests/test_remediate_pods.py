@@ -180,7 +180,7 @@ def test_dry_run_returns_plan_without_execution(monkeypatch):
     result = aks_remediate_pods(*CLUSTER_ARGS, "phonebook", "test-pod", strategy="rollout_restart", dry_run=True)
     assert result["status"] == "dry_run"
     assert "plan" in result
-    assert result["message"] == "Plan only; no cluster changes. Pass dry_run=False + approval_token to apply."
+    assert result["message"] == "Plan only; no cluster changes. Pass dry_run=False to apply."
 
 
 def test_approval_gates_required_for_write(monkeypatch):

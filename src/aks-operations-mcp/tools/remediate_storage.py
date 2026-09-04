@@ -31,7 +31,6 @@ def aks_remediate_storage(
     storage_name: str | None = None,
     strategy: str = "cleanup_pvc",
     dry_run: bool = True,
-    approval_token: str | None = None,
     check_mode: str = "quick",
 ) -> dict[str, Any]:
     """Execute a storage remediation plan to unblock upgrade-readiness issues."""
@@ -61,10 +60,10 @@ def aks_remediate_storage(
             "strategy": strategy,
             "scope": {"namespace": namespace} if namespace else {"cluster_wide": True},
             "plan": plan,
-            "message": "Plan only; no cluster changes. Pass dry_run=False + approval_token to apply.",
+            "message": "Plan only; no cluster changes. Pass dry_run=False to apply.",
         }
 
-    require_remediation_approval(check_mode, approval_token, namespace=namespace)
+    require_remediation_approval(check_mode, namespace=namespace)
 
     return _apply_plan(
         subscription_id,

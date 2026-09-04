@@ -44,3 +44,22 @@ def test_function_app_surface_matches_registry():
     schemas = {name: build_input_schema(tool) for name, tool in tools.items()}
     assert set(tools) == set(schemas)
     assert len(tools) == len(ALL_TOOLS)
+
+
+def test_remediation_schemas_do_not_expose_approval_token():
+    affected_tools = {
+        "aks_remediate_pdb",
+        "aks_rollback_pdb_remediation",
+        "aks_remediate_pods",
+        "aks_remediate_node",
+        "aks_remediate_storage",
+    }
+    schemas = {
+        tool.__name__: build_input_schema(tool)
+        for tool in ALL_TOOLS
+        if tool.__name__ in affected_tools
+    }
+
+    assert set(schemas) == affected_tools
+    for schema in schemas.values():
+        assert "approval_token" not in schema["properties"]
