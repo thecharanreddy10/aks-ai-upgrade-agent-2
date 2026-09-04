@@ -35,11 +35,13 @@ def aks_remediate_node(
 
     Strategies:
     - drain_node: Evict all pods (skip daemonsets), cordon node to prevent scheduling.
-                  Reversible via uncordon; pods can re-schedule after upgrade/node-ready.
+                  Reversible via uncordon; evicted pods can re-schedule after the node is ready.
     - restart_node: Reboot the node via kubectl debug node. Use for stuck kubelet.
 
     Returns a plan with exact kubectl commands and rollback procedure.
-    No cluster writes unless dry_run=False + approval gates pass.
+    No cluster writes unless dry_run=False and the full write gate passes.
+    ``approval_token`` is retained only for backwards compatibility; the shared gate does not
+    validate or require an application-level token.
     """
     validate_k8s_name(node_name, "node")
 
@@ -52,7 +54,7 @@ def aks_remediate_node(
 
     if strategy == "drain_node":
         plan = _plan_drain_node(node_name)
-    else:  # restart_node
+    else:
         plan = _plan_restart_node(node_name)
 
     if dry_run:
@@ -61,7 +63,7 @@ def aks_remediate_node(
             "strategy": strategy,
             "node": {"name": node_name},
             "plan": plan,
-            "message": "Plan only; no cluster changes. Pass dry_run=False + approval_token to apply.",
+            "message": "Plan only; no cluster changes. Pass dry_run=False with check_mode='full' to apply.",
         }
 
     require_remediation_approval(check_mode, approval_token, namespace=None)
@@ -103,6 +105,7 @@ def _plan_drain_node(node_name: str) -> dict[str, Any]:
                 "kind": "Node",
                 "name": node_name,
                 "kubectl_command": f"kubectl cordon {node_name}",
+                "rollback_command": f"kubectl uncordon {node_name}",
                 "description": "Mark node as unschedulable to prevent new pod scheduling.",
             },
             {
@@ -110,12 +113,12 @@ def _plan_drain_node(node_name: str) -> dict[str, Any]:
                 "kind": "Node",
                 "name": node_name,
                 "kubectl_command": f"kubectl drain {node_name} --ignore-daemonsets --delete-emptydir-data --timeout=5m",
-                "description": "Evict all pods (except daemonsets); local storage erased.",
+                "description": "Evict pods except daemonsets; --delete-emptydir-data may remove local emptyDir data.",
             },
         ],
         "post_drain_verification": {
             "command": f"kubectl get pods -A --field-selector spec.nodeName={node_name} --no-headers | wc -l",
-            "expected": "0 (all pods evicted)",
+            "expected": "0 non-daemonset pods; daemonset-managed pods may remain",
         },
         "uncordon_command": f"kubectl uncordon {node_name}",
         "uncordon_description": "Mark node as schedulable again after upgrade/maintenance.",
@@ -132,8 +135,8 @@ def _plan_restart_node(node_name: str) -> dict[str, Any]:
                 "type": "restart",
                 "kind": "Node",
                 "name": node_name,
-                "kubectl_command": f"kubectl debug node/{node_name} -it --image=busybox:1.35 -- chroot /host shutdown -r +1",
-                "description": "Schedule reboot 1 minute from now; allows graceful pod eviction.",
+                "kubectl_command": f"kubectl debug node/{node_name} --profile=sysadmin --image=busybox:1.36 -- chroot /host shutdown -r +1",
+                "description": "Schedule reboot 1 minute from now; command is non-interactive for AKS Run Command execution.",
             }
         ],
         "monitoring": {
@@ -152,7 +155,7 @@ def _apply_plan(
     plan: dict[str, Any],
     strategy: str,
 ) -> dict[str, Any]:
-    """Execute the remediation plan and verify success."""
+    """Execute the remediation plan and return applied changes plus rollback information."""
     if "error" in plan:
         return {
             "status": "failed",
@@ -163,6 +166,8 @@ def _apply_plan(
     try:
         for step in plan.get("steps", []):
             command = step.get("kubectl_command")
+            if not command:
+                raise ValueError(f"Remediation step {step.get('type')!r} has no command.")
             raw_logs = run_kubectl_raw(subscription_id, resource_group, cluster_name, command)
             applied_changes.append(
                 {
@@ -174,10 +179,21 @@ def _apply_plan(
                 }
             )
     except Exception as exc:  # noqa: BLE001
+        rollback_steps = [
+            {
+                "type": "rollback",
+                "kind": step.get("kind"),
+                "name": step.get("name"),
+                "command": step.get("rollback_command"),
+            }
+            for step in reversed(plan.get("steps", [])[: len(applied_changes)])
+            if step.get("rollback_command")
+        ]
         return {
             "status": "failed",
             "reason": str(exc),
             "applied_changes": applied_changes,
+            "rollback_steps": rollback_steps,
         }
 
     post_verify = plan.get("post_drain_verification") or plan.get("monitoring")
@@ -187,6 +203,16 @@ def _apply_plan(
         "node": {"name": node_name},
         "applied_changes": applied_changes,
         "post_verification": post_verify,
+        "rollback_steps": [
+            {
+                "type": "rollback",
+                "kind": step.get("kind"),
+                "name": step.get("name"),
+                "command": step.get("rollback_command"),
+            }
+            for step in reversed(plan.get("steps", []))
+            if step.get("rollback_command")
+        ],
         "uncordon_or_monitor": plan.get("uncordon_command") or plan.get("monitoring", {}).get("check_command"),
         "message": f"Node {strategy} applied successfully. Monitor pod re-scheduling and node readiness.",
     }
