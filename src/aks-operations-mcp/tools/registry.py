@@ -10,6 +10,7 @@ from __future__ import annotations
 import inspect
 from typing import Any, Callable, get_args, get_type_hints
 
+from tools.cli_operations import aks_az_read, aks_az_write, aks_kubectl_read, aks_kubectl_write
 from tools.deprecated_apis import aks_check_deprecated_apis
 from tools.discovery import (
     aks_get_available_upgrades,
@@ -46,6 +47,10 @@ ALL_TOOLS: tuple[Callable[..., dict[str, Any]], ...] = (
     aks_remediate_storage,
     aks_remediate_deprecated_apis,
     aks_generate_deprecated_api_manifests,
+    aks_kubectl_read,
+    aks_kubectl_write,
+    aks_az_read,
+    aks_az_write,
 )
 
 _JSON_TYPES: dict[Any, str] = {str: "string", int: "integer", float: "number", bool: "boolean"}
