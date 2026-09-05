@@ -10,9 +10,10 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+import threading
 from typing import Any
 
-from tools.common import run_kubectl_raw
+from tools.common import assert_namespace_not_protected, run_kubectl_raw
 
 _KUBECTL_READ_COMMANDS = frozenset(
     {
@@ -48,12 +49,9 @@ _AZ_READ_COMMANDS = (
     ("resource", "show"),
 )
 
-_AZ_WRITE_COMMANDS = (
-    ("aks", "nodepool", "update"),
-    ("aks", "nodepool", "upgrade"),
-)
+_AZ_WRITE_COMMANDS = (("aks", "nodepool", "update"),)
 
-_BLOCKED_KUBECTL_TOKENS = frozenset(
+_BLOCKED_KUBECTL_RESOURCE_TYPES = frozenset(
     {
         "namespace",
         "namespaces",
@@ -62,25 +60,14 @@ _BLOCKED_KUBECTL_TOKENS = frozenset(
         "clusterrole",
         "clusterrolebinding",
         "rolebinding",
-        "node",
         "persistentvolume",
         "pv",
         "pvc",
     }
 )
 
-_BLOCKED_AZ_TOKENS = frozenset(
-    {
-        "delete",
-        "remove",
-        "purge",
-        "role",
-        "policy",
-        "lock",
-        "group",
-        "subscription",
-    }
-)
+_AZ_CLI_LOGIN_LOCK = threading.Lock()
+_AZ_CLI_LOGGED_IN = False
 
 
 def _command_tokens(command: str, expected_cli: str) -> list[str]:
@@ -92,28 +79,47 @@ def _command_tokens(command: str, expected_cli: str) -> list[str]:
         raise ValueError(f"Invalid command quoting: {exc}") from exc
     if not tokens or tokens[0].lower() != expected_cli:
         raise ValueError(f"command must start with '{expected_cli}'")
-    if any(token in {"|", ";", "&&", "||", ">", ">>", "<", "`"} or token.startswith("$") for token in tokens):
+    if any(
+        token in {"|", ";", "&&", "||", ">", ">>", "<", "`"} or token.startswith("$")
+        for token in tokens
+    ):
         raise ValueError("shell operators and variable expansion are not allowed")
     return tokens
 
 
+def _extract_namespace(tokens: list[str]) -> str | None:
+    for index, token in enumerate(tokens):
+        if token in {"-n", "--namespace"} and index + 1 < len(tokens):
+            return tokens[index + 1]
+        if token.startswith("--namespace="):
+            return token.split("=", 1)[1]
+    return None
+
+
 def _validate_kubectl(tokens: list[str], *, write: bool) -> None:
+    if len(tokens) < 2:
+        raise ValueError("kubectl command must include a subcommand")
+
     base = tokens[1].lower()
     allowed = _KUBECTL_WRITE_COMMANDS if write else _KUBECTL_READ_COMMANDS
     if base not in allowed:
         raise PermissionError(f"kubectl subcommand '{base}' is not allowed for this operation")
 
-    if any(token.lower() in _BLOCKED_KUBECTL_TOKENS for token in tokens[1:]):
-        raise PermissionError("The requested kubectl resource is protected from generic CLI operations")
+    if write and any(token.lower() in _BLOCKED_KUBECTL_RESOURCE_TYPES for token in tokens[1:]):
+        raise PermissionError("The requested kubectl resource type is protected from generic write operations")
+
+    namespace = _extract_namespace(tokens)
+    if write:
+        assert_namespace_not_protected(namespace)
 
     if write and base == "delete":
-        if any(token.lower() in {"namespace", "node", "pvc", "pv", "crd"} for token in tokens[1:]):
+        if any(token.lower() in {"namespace", "node", "nodes", "pvc", "pv", "crd"} for token in tokens[1:]):
             raise PermissionError("Generic deletion of protected resource types is not allowed")
         if "--all" in tokens:
             raise PermissionError("Generic --all deletion is not allowed")
 
     if write and base == "rollout":
-        if len(tokens) < 3 or tokens[2].lower() not in {"restart"}:
+        if len(tokens) < 3 or tokens[2].lower() != "restart":
             raise PermissionError("Only 'kubectl rollout restart' is allowed")
 
 
@@ -122,16 +128,36 @@ def _validate_az(tokens: list[str], *, write: bool) -> None:
     candidates = _AZ_WRITE_COMMANDS if write else _AZ_READ_COMMANDS
     if not any(tuple(lowered[: len(prefix)]) == prefix for prefix in candidates):
         raise PermissionError("The requested Azure CLI operation is not allowlisted")
-    if any(token in _BLOCKED_AZ_TOKENS for token in lowered):
-        raise PermissionError("The requested Azure CLI operation contains a blocked operation")
+
+
+def _run_subprocess(command: list[str], *, timeout: int) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(command, check=False, capture_output=True, text=True, timeout=timeout)
+
+
+def _ensure_azure_cli_login() -> None:
+    """Authenticate Azure CLI with the container's managed identity once per process."""
+    global _AZ_CLI_LOGGED_IN
+    if _AZ_CLI_LOGGED_IN:
+        return
+
+    with _AZ_CLI_LOGIN_LOCK:
+        if _AZ_CLI_LOGGED_IN:
+            return
+        timeout = min(int(os.getenv("AKS_CLI_LOGIN_TIMEOUT_SECONDS", "30")), 60)
+        completed = _run_subprocess(
+            ["az", "login", "--identity", "--allow-no-subscriptions"],
+            timeout=timeout,
+        )
+        if completed.returncode != 0:
+            output = (completed.stdout or "") + ("\n" + completed.stderr if completed.stderr else "")
+            raise RuntimeError(f"Azure CLI managed-identity login failed: {output.strip()}")
+        _AZ_CLI_LOGGED_IN = True
 
 
 def _run_azure_cli(command: str) -> str:
-    completed = subprocess.run(
+    _ensure_azure_cli_login()
+    completed = _run_subprocess(
         shlex.split(command, posix=True),
-        check=False,
-        capture_output=True,
-        text=True,
         timeout=int(os.getenv("AKS_CLI_TIMEOUT_SECONDS", "120")),
     )
     output = (completed.stdout or "") + ("\n" + completed.stderr if completed.stderr else "")
@@ -179,7 +205,7 @@ def aks_kubectl_write(
 
 
 def aks_az_read(command: str) -> dict[str, Any]:
-    """Run an allowlisted read-only Azure CLI command using the container's Azure identity."""
+    """Run an allowlisted read-only Azure CLI command using the container's managed identity."""
     tokens = _command_tokens(command, "az")
     _validate_az(tokens, write=False)
     raw = _run_azure_cli(shlex.join(tokens))
@@ -190,7 +216,7 @@ def aks_az_write(
     command: str,
     check_mode: str = "quick",
 ) -> dict[str, Any]:
-    """Run a tightly allowlisted Azure CLI write operation without an application approval token."""
+    """Run a tightly allowlisted Azure CLI node-pool update without an application approval token."""
     if check_mode != "full":
         raise PermissionError("Azure CLI write operations require check_mode='full'.")
     if os.getenv("AKS_REMEDIATION_ENABLE_WRITE", "false").lower() != "true":
