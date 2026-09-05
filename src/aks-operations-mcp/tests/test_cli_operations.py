@@ -10,7 +10,7 @@ from tools.cli_operations import (
 
 
 def test_kubectl_read_allowlist_accepts_get_and_describe() -> None:
-    for command in ("kubectl get pods -A", "kubectl describe pod web -n default"):
+    for command in ("kubectl get pods -A", "kubectl get nodes", "kubectl describe pod web -n default"):
         tokens = _command_tokens(command, "kubectl")
         _validate_kubectl(tokens, write=False)
 
@@ -26,10 +26,16 @@ def test_kubectl_rejects_shell_operators() -> None:
         _command_tokens("kubectl get pods; rm -rf /", "kubectl")
 
 
-def test_kubectl_rejects_protected_resource_types() -> None:
-    tokens = _command_tokens("kubectl get nodes", "kubectl")
+def test_kubectl_write_rejects_protected_resource_types() -> None:
+    tokens = _command_tokens("kubectl patch pvc data -n default --type merge -p '{}'", "kubectl")
     with pytest.raises(PermissionError):
-        _validate_kubectl(tokens, write=False)
+        _validate_kubectl(tokens, write=True)
+
+
+def test_kubectl_write_rejects_protected_namespaces() -> None:
+    tokens = _command_tokens("kubectl patch deployment web -n kube-system --type merge -p '{}'", "kubectl")
+    with pytest.raises(PermissionError):
+        _validate_kubectl(tokens, write=True)
 
 
 def test_kubectl_write_allows_rollout_restart() -> None:
