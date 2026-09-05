@@ -6,9 +6,9 @@ new controlled CLI tools. It never accepts or requires an application approval t
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any
 
-from tools.cli_operations import aks_az_read, aks_kubectl_read, aks_kubectl_write
+from tools.cli_operations import aks_az_read, aks_az_write, aks_kubectl_read, aks_kubectl_write
 
 
 def aks_resolve_upgrade_issue(
@@ -21,9 +21,9 @@ def aks_resolve_upgrade_issue(
 ) -> dict[str, Any]:
     """Investigate an upgrade issue and return a structured next-action plan.
 
-    This tool is intentionally conservative: it performs read-only investigation and
-    identifies whether a dedicated remediation should be preferred. It does not invent
-    or execute arbitrary write commands on behalf of the model.
+    This planner is intentionally conservative: it recommends dedicated remediation tools
+    for known blockers and generic CLI investigation for unforeseen workload/infrastructure
+    failures. Actual generic writes remain behind full check mode and the existing write gate.
     """
     if not issue or not issue.strip():
         raise ValueError("issue must be a non-empty description")
@@ -33,7 +33,7 @@ def aks_resolve_upgrade_issue(
 
     if any(term in lowered for term in ("pdb", "disruption", "eviction", "drain")):
         checks.append({"category": "pdb", "recommended_tool": "aks_check_pdb"})
-    if any(term in lowered for term in ("pod", "pending", "crashloop", "unschedul")):
+    if any(term in lowered for term in ("pod", "pending", "crashloop", "unschedul", "container")):
         checks.append({"category": "pods", "recommended_tool": "aks_check_pod_health"})
     if any(term in lowered for term in ("pvc", "pv", "storage", "volume", "csi")):
         checks.append({"category": "storage", "recommended_tool": "aks_check_storage"})
@@ -52,22 +52,20 @@ def aks_resolve_upgrade_issue(
             {"category": "apis", "recommended_tool": "aks_check_deprecated_apis"},
         ]
 
-    dynamic_read_available = True
-    cli_hint = "Use aks_kubectl_read/aks_az_read to investigate details not covered by dedicated tools."
-
     return {
         "issue": issue,
         "target_version": target_version,
         "dry_run": dry_run,
         "recommended_checks": checks,
-        "dynamic_cli_available": dynamic_read_available,
-        "cli_hint": cli_hint,
-        "write_policy": "Use dedicated remediation tools first; generic kubectl write requires full check_mode and AKS_REMEDIATION_ENABLE_WRITE=true.",
+        "dynamic_cli_available": True,
+        "cli_hint": "Use aks_kubectl_read/aks_az_read to investigate details not covered by dedicated tools, then use aks_kubectl_write/aks_az_write only when a concrete remediation is understood.",
+        "write_policy": "Use dedicated remediation tools first; generic writes require full check_mode and AKS_REMEDIATION_ENABLE_WRITE=true.",
     }
 
 
 __all__ = [
     "aks_az_read",
+    "aks_az_write",
     "aks_kubectl_read",
     "aks_kubectl_write",
     "aks_resolve_upgrade_issue",
