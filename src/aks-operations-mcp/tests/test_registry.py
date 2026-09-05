@@ -63,3 +63,19 @@ def test_remediation_schemas_do_not_expose_approval_token():
     assert set(schemas) == affected_tools
     for schema in schemas.values():
         assert "approval_token" not in schema["properties"]
+
+
+def test_generic_write_tool_schemas_do_not_expose_approval_token():
+    affected_tools = {
+        "aks_kubectl_write",
+        "aks_az_write",
+    }
+    schemas = {
+        tool.__name__: build_input_schema(tool)
+        for tool in ALL_TOOLS
+        if tool.__name__ in affected_tools
+    }
+
+    assert set(schemas) == affected_tools
+    for schema in schemas.values():
+        assert "approval_token" not in schema["properties"]

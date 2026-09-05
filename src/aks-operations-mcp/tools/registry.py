@@ -10,6 +10,7 @@ from __future__ import annotations
 import inspect
 from typing import Any, Callable, get_args, get_type_hints
 
+from tools.cli_operations import aks_az_read, aks_az_write, aks_kubectl_read, aks_kubectl_write
 from tools.deprecated_apis import aks_check_deprecated_apis
 from tools.discovery import (
     aks_get_available_upgrades,
@@ -24,6 +25,7 @@ from tools.remediate_nodes import aks_remediate_node
 from tools.remediate_pdb import aks_remediate_pdb, aks_rollback_pdb_remediation
 from tools.remediate_pods import aks_remediate_pods
 from tools.remediate_storage import aks_remediate_storage
+from tools.resolve_upgrade_issue import aks_resolve_upgrade_issue
 from tools.storage import aks_check_storage
 from tools.upgrade import aks_upgrade_node_pool, aks_validate_upgrade_readiness
 from tools.validation import aks_check_node_health, aks_check_pdb, aks_check_pod_health
@@ -46,6 +48,11 @@ ALL_TOOLS: tuple[Callable[..., dict[str, Any]], ...] = (
     aks_remediate_storage,
     aks_remediate_deprecated_apis,
     aks_generate_deprecated_api_manifests,
+    aks_kubectl_read,
+    aks_kubectl_write,
+    aks_az_read,
+    aks_az_write,
+    aks_resolve_upgrade_issue,
 )
 
 _JSON_TYPES: dict[Any, str] = {str: "string", int: "integer", float: "number", bool: "boolean"}
