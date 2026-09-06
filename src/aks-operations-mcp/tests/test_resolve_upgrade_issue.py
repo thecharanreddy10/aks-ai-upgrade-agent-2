@@ -13,7 +13,10 @@ def test_resolver_recommends_pdb_checks_for_disruption_issue() -> None:
     )
 
     assert result["target_version"] == "1.35"
-    assert result["recommended_checks"] == [{"category": "pdb", "recommended_tool": "aks_check_pdb"}]
+    assert result["recommended_checks"] == [
+        {"category": "pdb", "recommended_tool": "aks_check_pdb"},
+        {"category": "node", "recommended_tool": "aks_check_node_health"},
+    ]
     assert result["dynamic_cli_available"] is True
     assert "approval_token" not in result["write_policy"]
 

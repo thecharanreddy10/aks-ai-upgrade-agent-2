@@ -8,6 +8,7 @@ command allowlists constrain what the agent can execute.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 import threading
@@ -66,6 +67,9 @@ _BLOCKED_KUBECTL_RESOURCE_TYPES = frozenset(
     }
 )
 
+_KUBECTL_OPTIONS_WITH_VALUES = frozenset({"-n", "--namespace"})
+_SHELL_OPERATOR_RE = re.compile(r"[;&|<>`$]")
+
 _AZ_CLI_LOGIN_LOCK = threading.Lock()
 _AZ_CLI_LOGGED_IN = False
 
@@ -79,10 +83,7 @@ def _command_tokens(command: str, expected_cli: str) -> list[str]:
         raise ValueError(f"Invalid command quoting: {exc}") from exc
     if not tokens or tokens[0].lower() != expected_cli:
         raise ValueError(f"command must start with '{expected_cli}'")
-    if any(
-        token in {"|", ";", "&&", "||", ">", ">>", "<", "`"} or token.startswith("$")
-        for token in tokens
-    ):
+    if any(_SHELL_OPERATOR_RE.search(token) for token in tokens):
         raise ValueError("shell operators and variable expansion are not allowed")
     return tokens
 
@@ -100,7 +101,23 @@ def _validate_kubectl(tokens: list[str], *, write: bool) -> None:
     if len(tokens) < 2:
         raise ValueError("kubectl command must include a subcommand")
 
-    base = tokens[1].lower()
+    verb_index = 1
+    while verb_index < len(tokens):
+        token = tokens[verb_index]
+        if token in _KUBECTL_OPTIONS_WITH_VALUES:
+            if verb_index + 1 >= len(tokens):
+                raise ValueError(f"kubectl option '{token}' requires a value")
+            verb_index += 2
+            continue
+        if token.startswith("--namespace="):
+            verb_index += 1
+            continue
+        break
+
+    if verb_index >= len(tokens):
+        raise ValueError("kubectl command must include a subcommand")
+
+    base = tokens[verb_index].lower()
     allowed = _KUBECTL_WRITE_COMMANDS if write else _KUBECTL_READ_COMMANDS
     if base not in allowed:
         raise PermissionError(f"kubectl subcommand '{base}' is not allowed for this operation")
@@ -119,7 +136,7 @@ def _validate_kubectl(tokens: list[str], *, write: bool) -> None:
             raise PermissionError("Generic --all deletion is not allowed")
 
     if write and base == "rollout":
-        if len(tokens) < 3 or tokens[2].lower() != "restart":
+        if len(tokens) <= verb_index + 1 or tokens[verb_index + 1].lower() != "restart":
             raise PermissionError("Only 'kubectl rollout restart' is allowed")
 
 

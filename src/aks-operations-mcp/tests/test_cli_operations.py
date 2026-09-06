@@ -10,7 +10,14 @@ from tools.cli_operations import (
 
 
 def test_kubectl_read_allowlist_accepts_get_and_describe() -> None:
-    for command in ("kubectl get pods -A", "kubectl get nodes", "kubectl describe pod web -n default"):
+    for command in (
+        "kubectl get pods -A",
+        "kubectl get nodes",
+        "kubectl describe pod web -n default",
+        "kubectl -n deprecated-api-tests get pods",
+        "kubectl --namespace=deprecated-api-tests get pods",
+        "kubectl get pods -n deprecated-api-tests",
+    ):
         tokens = _command_tokens(command, "kubectl")
         _validate_kubectl(tokens, write=False)
 
@@ -22,8 +29,14 @@ def test_kubectl_read_rejects_write_subcommands() -> None:
 
 
 def test_kubectl_rejects_shell_operators() -> None:
-    with pytest.raises(ValueError):
-        _command_tokens("kubectl get pods; rm -rf /", "kubectl")
+    for command in (
+        "kubectl get pods; rm -rf /",
+        "kubectl get pods && rm -rf /",
+        "kubectl get pods | something",
+        "kubectl get pods > output.txt",
+    ):
+        with pytest.raises(ValueError):
+            _command_tokens(command, "kubectl")
 
 
 def test_kubectl_write_rejects_protected_resource_types() -> None:

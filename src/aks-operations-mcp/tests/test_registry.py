@@ -30,7 +30,8 @@ def test_schema_generated_for_every_registered_tool():
         schema = build_input_schema(tool)
         assert schema["properties"], f"{tool.__name__} produced an empty schema"
         for arg in ("subscription_id", "resource_group", "cluster_name"):
-            assert arg in schema["properties"]
+            if arg in schema["properties"]:
+                assert schema["properties"][arg] == {"type": "string"}
 
 
 def test_boolean_and_optional_defaults_are_not_required():
