@@ -8,7 +8,7 @@ as tools are added.
 from __future__ import annotations
 
 import inspect
-from typing import Any, Callable, get_args, get_type_hints
+from typing import Any, Callable, get_args, get_origin, get_type_hints
 
 from tools.cli_operations import aks_az_read, aks_az_write, aks_kubectl_read, aks_kubectl_write
 from tools.deprecated_apis import aks_check_deprecated_apis
@@ -63,10 +63,20 @@ def _schema_for_annotation(annotation: Any) -> dict[str, Any]:
     union_args = get_args(annotation)
     if union_args:
         nullable = type(None) in union_args
+        list_args = [arg for arg in union_args if get_origin(arg) is list]
+        if nullable and len(list_args) == 1:
+            item_args = get_args(list_args[0])
+            item_schema = _schema_for_annotation(item_args[0]) if item_args else {}
+            return {"anyOf": [{"type": "array", "items": item_schema}, {"type": "null"}]}
         names = sorted({_JSON_TYPES[arg] for arg in union_args if arg in _JSON_TYPES})
         if not names:
             return {}
         return {"type": [*names, "null"] if nullable else (names[0] if len(names) == 1 else names)}
+
+    if get_origin(annotation) is list:
+        item_args = get_args(annotation)
+        item_schema = _schema_for_annotation(item_args[0]) if item_args else {}
+        return {"type": "array", "items": item_schema}
 
     mapped = _JSON_TYPES.get(annotation)
     return {"type": mapped} if mapped else {}

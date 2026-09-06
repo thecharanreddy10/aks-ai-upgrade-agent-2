@@ -74,6 +74,16 @@ _AZ_CLI_LOGIN_LOCK = threading.Lock()
 _AZ_CLI_LOGGED_IN = False
 
 
+def _validate_command_tokens(tokens: list[str], expected_cli: str) -> list[str]:
+    if not tokens or not all(isinstance(token, str) for token in tokens):
+        raise ValueError("command_tokens must be a non-empty string array")
+    if tokens[0].lower() != expected_cli:
+        raise ValueError(f"command must start with '{expected_cli}'")
+    if any(_SHELL_OPERATOR_RE.search(token) for token in tokens):
+        raise ValueError("shell operators and variable expansion are not allowed")
+    return tokens
+
+
 def _command_tokens(command: str, expected_cli: str) -> list[str]:
     if not isinstance(command, str) or not command.strip():
         raise ValueError("command must be a non-empty string")
@@ -81,11 +91,19 @@ def _command_tokens(command: str, expected_cli: str) -> list[str]:
         tokens = shlex.split(command, posix=True)
     except ValueError as exc:
         raise ValueError(f"Invalid command quoting: {exc}") from exc
-    if not tokens or tokens[0].lower() != expected_cli:
-        raise ValueError(f"command must start with '{expected_cli}'")
-    if any(_SHELL_OPERATOR_RE.search(token) for token in tokens):
-        raise ValueError("shell operators and variable expansion are not allowed")
-    return tokens
+    return _validate_command_tokens(tokens, expected_cli)
+
+
+def _provided_command_tokens(
+    command: str | None,
+    command_tokens: list[str] | None,
+    expected_cli: str,
+) -> list[str]:
+    if (command is None) == (command_tokens is None):
+        raise ValueError("provide exactly one of command or command_tokens")
+    if command_tokens is not None:
+        return _validate_command_tokens(command_tokens, expected_cli)
+    return _command_tokens(command, expected_cli)  # type: ignore[arg-type]
 
 
 def _extract_namespace(tokens: list[str]) -> str | None:
@@ -101,19 +119,7 @@ def _validate_kubectl(tokens: list[str], *, write: bool) -> None:
     if len(tokens) < 2:
         raise ValueError("kubectl command must include a subcommand")
 
-    verb_index = 1
-    while verb_index < len(tokens):
-        token = tokens[verb_index]
-        if token in _KUBECTL_OPTIONS_WITH_VALUES:
-            if verb_index + 1 >= len(tokens):
-                raise ValueError(f"kubectl option '{token}' requires a value")
-            verb_index += 2
-            continue
-        if token.startswith("--namespace="):
-            verb_index += 1
-            continue
-        break
-
+    verb_index = _kubectl_verb_index(tokens)
     if verb_index >= len(tokens):
         raise ValueError("kubectl command must include a subcommand")
 
@@ -138,6 +144,22 @@ def _validate_kubectl(tokens: list[str], *, write: bool) -> None:
     if write and base == "rollout":
         if len(tokens) <= verb_index + 1 or tokens[verb_index + 1].lower() != "restart":
             raise PermissionError("Only 'kubectl rollout restart' is allowed")
+
+
+def _kubectl_verb_index(tokens: list[str]) -> int:
+    verb_index = 1
+    while verb_index < len(tokens):
+        token = tokens[verb_index]
+        if token in _KUBECTL_OPTIONS_WITH_VALUES:
+            if verb_index + 1 >= len(tokens):
+                raise ValueError(f"kubectl option '{token}' requires a value")
+            verb_index += 2
+            continue
+        if token.startswith("--namespace="):
+            verb_index += 1
+            continue
+        break
+    return verb_index
 
 
 def _validate_az(tokens: list[str], *, write: bool) -> None:
@@ -200,9 +222,10 @@ def aks_kubectl_write(
     subscription_id: str,
     resource_group: str,
     cluster_name: str,
-    command: str,
+    command: str | None = None,
     check_mode: str = "quick",
     confirm_destructive: bool = False,
+    command_tokens: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run a tightly allowlisted kubectl write operation without an application approval token."""
     if check_mode != "full":
@@ -210,10 +233,10 @@ def aks_kubectl_write(
     if os.getenv("AKS_REMEDIATION_ENABLE_WRITE", "false").lower() != "true":
         raise PermissionError("kubectl write operations are disabled. Set AKS_REMEDIATION_ENABLE_WRITE=true to enable.")
 
-    tokens = _command_tokens(command, "kubectl")
+    tokens = _provided_command_tokens(command, command_tokens, "kubectl")
     _validate_kubectl(tokens, write=True)
 
-    destructive = tokens[1].lower() == "delete"
+    destructive = tokens[_kubectl_verb_index(tokens)].lower() == "delete"
     if destructive and not confirm_destructive:
         raise PermissionError("This CLI operation deletes cluster objects; pass confirm_destructive=True to proceed.")
 
