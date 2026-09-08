@@ -28,7 +28,15 @@ from tools.remediate_storage import aks_remediate_storage
 from tools.resolve_upgrade_issue import aks_resolve_upgrade_issue
 from tools.storage import aks_check_storage
 from tools.upgrade import aks_upgrade_node_pool, aks_validate_upgrade_readiness
-from tools.validation import aks_check_node_health, aks_check_pdb, aks_check_pod_health
+from tools.validation import (
+    aks_check_node_health,
+    aks_check_operator_health,
+    aks_check_pdb,
+    aks_check_pod_health,
+    aks_check_priority_class,
+    aks_check_single_replica_services,
+    aks_check_node_pool_surge,
+)
 
 ALL_TOOLS: tuple[Callable[..., dict[str, Any]], ...] = (
     aks_get_cluster_details,
@@ -53,6 +61,10 @@ ALL_TOOLS: tuple[Callable[..., dict[str, Any]], ...] = (
     aks_az_read,
     aks_az_write,
     aks_resolve_upgrade_issue,
+    aks_check_single_replica_services,
+    aks_check_operator_health,
+    aks_check_node_pool_surge,
+    aks_check_priority_class,
 )
 
 _JSON_TYPES: dict[Any, str] = {str: "string", int: "integer", float: "number", bool: "boolean"}
