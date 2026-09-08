@@ -10,7 +10,15 @@ from typing import Any, Callable
 from tools.common import get_container_service_client
 from tools.deprecated_apis import aks_check_deprecated_apis
 from tools.storage import aks_check_storage
-from tools.validation import aks_check_node_health, aks_check_pdb, aks_check_pod_health
+from tools.validation import (
+    aks_check_node_health,
+    aks_check_node_pool_surge,
+    aks_check_operator_health,
+    aks_check_pdb,
+    aks_check_pod_health,
+    aks_check_priority_class,
+    aks_check_single_replica_services,
+)
 
 
 def aks_validate_upgrade_readiness(
@@ -22,17 +30,26 @@ def aks_validate_upgrade_readiness(
     maintenance_window_end_utc: str | None = None,
     check_mode: str = "quick",
     target_kubernetes_version: str | None = None,
+    cerebral_plus_namespace: str | None = None,
+    cerebral_plus_label_selector: str | None = None,
+    operator_environment: str = "SIT",
+    operator_namespace: str | None = None,
+    operator_selector: str | None = None,
+    operator_target_version: str | None = None,
+    surge_pool_name: str | None = None,
+    priority_namespace: str = "kube-system",
+    priority_selector: str | None = None,
 ) -> dict[str, Any]:
     """Run pre-upgrade health and safety checks.
 
-    target_kubernetes_version is passed through to the deprecated-API check; if omitted, that
-    check falls back to the cluster's own current version (see tools.deprecated_apis).
+    The original five deep checks are preserved. Additional read-only checks cover critical
+    single-replica services, SIT operator health, user-pool maxSurge, and PriorityClass.
 
-    In "full" mode the 5 deep checks each already batch their own kubectl queries into a single
-    AKS Run Command invocation; they are issued concurrently here (not sequentially), since AKS
-    Run Command's ~25-35s per-invocation overhead otherwise dominates total wall-clock time.
+    The Cerebral Plus and critical-system/operator checks require explicit selectors so this tool
+    never guesses which workloads are business-critical. Unconfigured checks return a visible
+    NOT_CONFIGURED/SKIPPED state and are not silently treated as failures.
 
-    Returns a structured readiness report and blocking reasons.
+    In "full" mode checks run concurrently to avoid serial AKS Run Command latency.
     """
     if check_mode not in {"quick", "full"}:
         raise ValueError("check_mode must be 'quick' or 'full'.")
@@ -42,6 +59,10 @@ def aks_validate_upgrade_readiness(
     pdb_health: dict[str, Any] = {}
     storage_health: dict[str, Any] = {}
     deprecated_api_health: dict[str, Any] = {}
+    single_replica_health: dict[str, Any] = {}
+    operator_health: dict[str, Any] = {}
+    node_pool_surge_health: dict[str, Any] = {}
+    priority_class_health: dict[str, Any] = {}
     deep_check_errors: list[str] = []
 
     blockers: list[str] = []
@@ -78,6 +99,51 @@ def aks_validate_upgrade_readiness(
                     cluster_name,
                     target_version=target_kubernetes_version,
                     namespace=namespace,
+                ),
+            ),
+            (
+                "single_replica_health",
+                "single_replica_check_failed",
+                lambda: aks_check_single_replica_services(
+                    subscription_id,
+                    resource_group,
+                    cluster_name,
+                    namespace=cerebral_plus_namespace,
+                    label_selector=cerebral_plus_label_selector,
+                ),
+            ),
+            (
+                "operator_health",
+                "operator_check_failed",
+                lambda: aks_check_operator_health(
+                    subscription_id,
+                    resource_group,
+                    cluster_name,
+                    environment=operator_environment,
+                    namespace=operator_namespace,
+                    operator_selector=operator_selector,
+                    target_version=operator_target_version,
+                ),
+            ),
+            (
+                "node_pool_surge_health",
+                "node_pool_surge_check_failed",
+                lambda: aks_check_node_pool_surge(
+                    subscription_id,
+                    resource_group,
+                    cluster_name,
+                    node_pool_name=surge_pool_name,
+                ),
+            ),
+            (
+                "priority_class_health",
+                "priority_class_check_failed",
+                lambda: aks_check_priority_class(
+                    subscription_id,
+                    resource_group,
+                    cluster_name,
+                    namespace=priority_namespace,
+                    critical_selector=priority_selector,
                 ),
             ),
         ]
@@ -119,6 +185,36 @@ def aks_validate_upgrade_readiness(
             blockers.extend(deprecated_api_health.get("blockers", []))
             warnings.extend(deprecated_api_health.get("warnings", []))
 
+        if "single_replica_health" in results:
+            single_replica_health = results["single_replica_health"]
+            if single_replica_health.get("status") == "WARNING" and single_replica_health.get("single_replica_workloads"):
+                blockers.append("Critical single-replica Cerebral Plus workloads detected.")
+            elif single_replica_health.get("status") == "INCOMPLETE":
+                blockers.append("Cerebral Plus single-replica check could not be fully completed.")
+
+        if "operator_health" in results:
+            operator_health = results["operator_health"]
+            if operator_health.get("status") == "BLOCKED":
+                blockers.append("Unhealthy configured SIT operator workloads detected.")
+            elif operator_health.get("status") == "INCOMPLETE":
+                blockers.append("SIT operator health check could not be fully completed.")
+            elif operator_health.get("status") == "WARNING":
+                warnings.append("Configured SIT operator version differs from the requested target version.")
+
+        if "node_pool_surge_health" in results:
+            node_pool_surge_health = results["node_pool_surge_health"]
+            warnings.extend(
+                [
+                    f"Node pool '{item['pool_name']}' maxSurge is {item['current_max_surge']}; recommended value is 33% for the 10-node user-pool rule."
+                    for item in node_pool_surge_health.get("recommendations", [])
+                ]
+            )
+
+        if "priority_class_health" in results:
+            priority_class_health = results["priority_class_health"]
+            if priority_class_health.get("status") == "WARNING":
+                warnings.append("Critical system pods with non-compliant PriorityClass detected.")
+
         if deep_check_errors:
             blockers.append("One or more deep checks failed to execute.")
     else:
@@ -152,6 +248,10 @@ def aks_validate_upgrade_readiness(
         "pdb_health": pdb_health,
         "storage_health": storage_health,
         "deprecated_api_health": deprecated_api_health,
+        "single_replica_health": single_replica_health,
+        "operator_health": operator_health,
+        "node_pool_surge_health": node_pool_surge_health,
+        "priority_class_health": priority_class_health,
     }
 
 
