@@ -15,6 +15,8 @@ In Phase 4, it also includes an Azure Functions entrypoint (`function_app.py`) a
 - `aks_check_storage`
 - `aks_check_deprecated_apis`
 - `aks_validate_upgrade_readiness`
+- `aks_execute_confirmed_upgrade`
+- `aks_get_upgrade_execution_status`
 - `aks_upgrade_node_pool`
 - `aks_remediate_pdb`
 - `aks_remediate_pods`
@@ -25,19 +27,28 @@ In Phase 4, it also includes an Azure Functions entrypoint (`function_app.py`) a
 
 ## Upgrade guardrails
 
-`aks_upgrade_node_pool` is protected by default:
+`aks_execute_confirmed_upgrade` is the non-blocking upgrade coordinator exposed to the agent. It is intended for long-running AKS control-plane and node-pool upgrades:
 
-1. It runs health and safety prechecks (nodes, pods, PDB, optional maintenance window).
-   - `check_mode=quick` (default): lightweight gate suitable for frequent calls.
-   - `check_mode=full`: runs deep Kubernetes checks (slower, stricter).
-2. It defaults to `dry_run=true`.
-3. Real writes require `AKS_UPGRADE_ENABLE_WRITE=true`.
-4. Real writes additionally require `check_mode=full`.
-5. The MCP runtime identity must have sufficient Azure authorization for the requested operation.
+1. The calling agent must obtain explicit human approval for the specific upgrade plan before invoking it.
+2. It runs the existing authoritative target and mandatory readiness checks before submitting a control-plane write.
+3. It submits at most one Azure long-running upgrade operation per call and returns without waiting for the Azure operation to finish.
+4. The agent should use `aks_get_upgrade_execution_status` to observe the live provisioning/version state before advancing the workflow.
+5. Once the current stage has reached its target version and `Succeeded` provisioning state, the agent can call `aks_execute_confirmed_upgrade` again with the same target and scope to advance to the next stage.
+6. For `complete_cluster`, node-pool upgrade evidence is refreshed only after the control-plane target is observed. A node pool is modified only when fresh Azure evidence shows the target path is `SUPPORTED`.
+7. If a control-plane or node-pool operation is already in progress, the coordinator returns an `in_progress` state and does not submit a duplicate write.
+8. The coordinator returns `completed`, `partial`, `blocked`, or `failed` states rather than holding the MCP request open for the full Azure long-running operation.
+
+Real upgrade writes still require:
+
+- `AKS_UPGRADE_ENABLE_WRITE=true`.
+- `check_mode=full`.
+- The MCP runtime identity must have sufficient Azure authorization for the requested operation.
 
 Optional env var:
 
 - `AKS_UPGRADE_ENABLE_WRITE` (default: `false`)
+
+`aks_upgrade_node_pool` remains available for compatibility but is not the preferred agent workflow. The agent should use `aks_execute_confirmed_upgrade` for confirmed upgrade execution and `aks_get_upgrade_execution_status` for progress checks.
 
 ## Remediation guardrails
 

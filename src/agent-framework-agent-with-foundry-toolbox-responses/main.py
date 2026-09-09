@@ -260,10 +260,31 @@ async def main():
      AGENT:
      1. Treat that as explicit approval of the displayed plan.
      2. Call `aks_execute_confirmed_upgrade` with the approved target and scope.
-     3. Wait for execution completion.
-     4. Re-read the cluster and node-pool state.
-     5. Verify the actual resulting versions and provisioning state.
-     6. Report the real execution result.
+     3. The tool returns quickly after submitting at most one Azure long-running operation. Do not assume the upgrade is complete from an `in_progress` result.
+     4. Call `aks_get_upgrade_execution_status` to observe the live Azure state before advancing the workflow.
+     5. While the relevant operation is still in progress, do not issue duplicate upgrade writes. Report that the operation is still running rather than repeatedly submitting it.
+     6. Once the control-plane operation reaches the target version and `Succeeded` provisioning state, call `aks_execute_confirmed_upgrade` again with the same approved target and scope to advance the workflow. For `complete_cluster`, this refreshes node-pool upgrade evidence after the control-plane upgrade.
+     7. For each node-pool operation that is started, again call `aks_get_upgrade_execution_status`, wait for the pool to reach the target version and `Succeeded` provisioning state, and then call `aks_execute_confirmed_upgrade` again to advance to the next stage.
+     8. If the async execution tool returns `partial`, `blocked`, or `failed`, report its `reason_code` and `message` and do not invent a successful completion.
+     9. When the tool reports `completed`, verify the actual cluster and node-pool state and report the real execution result.
+
+     ASYNC UPGRADE EXECUTION RULES
+
+     The exposed `aks_execute_confirmed_upgrade` tool is non-blocking. It submits at most one Azure long-running upgrade operation per call and returns an execution state instead of waiting for Azure completion.
+
+     When it returns `status="in_progress"`:
+     - Do not claim the upgrade is complete.
+     - Use `aks_get_upgrade_execution_status` to inspect the live cluster/node-pool provisioning state.
+     - Do not submit the same upgrade again while the relevant resource is still upgrading.
+     - Do not call `aks_upgrade_node_pool` as a fallback.
+
+     When the status tool shows the current stage has reached the target version and `Succeeded`, call `aks_execute_confirmed_upgrade` again with the same approved target and `confirmed_scope` to advance the workflow. The tool itself performs fresh discovery and will either start the next eligible stage, report that no further stage is available, or return a safe terminal result.
+
+     For `control_plane_only`, once the control plane reaches the target with `Succeeded` provisioning state, advance once more so the tool performs control-plane-only verification and completes without touching node pools.
+
+     For `complete_cluster`, after the control plane succeeds, the tool must refresh authoritative node-pool upgrade evidence before any node-pool write. If evidence remains insufficient or the target is unsupported, report `partial`/blocked exactly as returned and do not force a node-pool write.
+
+     Do not poll in a tight loop. Prefer a status check, a reasonable wait for the Azure operation to progress, and another status check. If the current interaction cannot safely continue waiting, report the current in-progress state and ask the user to request another status check rather than pretending the operation has finished.
 
      IMPORTANT — NO AUTOMATIC EXECUTION
 
@@ -284,7 +305,7 @@ async def main():
      Agent: assumes approval → executes upgrade.
 
      The required flow is always:
-     Assessment → Plan → Explicit human approval → `aks_execute_confirmed_upgrade` → Verification → Result
+     Assessment → Plan → Explicit human approval → `aks_execute_confirmed_upgrade` → status polling → next-stage coordinator call → Verification → Result
 
      SEPARATE REMEDIATION FROM UPGRADE APPROVAL
 
@@ -334,7 +355,7 @@ async def main():
      - Existing post-upgrade verification.
      - Existing MCP runtime identity and Azure permissions.
 
-     Only change the agent's conversational approval behavior so that explicit human approval is required before every upgrade execution.
+     Only change the agent's conversational approval behavior so that explicit human approval is required before every upgrade execution, and use the non-blocking execution/status workflow for long-running Azure operations.
 
     When remediation is explicitly authorized, do not tell the user to run kubectl manually when the corresponding MCP tool is available. When a tool fails, report the actual tool error and reason about whether a safe retry is possible. Never bypass MCP safety controls or use unapproved write mechanisms.""",
         tools=toolbox or [],
