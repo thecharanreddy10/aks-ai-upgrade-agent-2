@@ -192,5 +192,78 @@ def test_planner_has_no_approval_or_confirmation_parameter():
     assert "approval_token" not in schema["properties"] and "confirm_upgrade" not in schema["properties"]
 
 
+# Regression tests for is_available semantics (issue: inconsistency with authoritative ARM data)
+# See: https://github.com/microsoft/aks-ai-upgrade-agent/issues/xxx
+# The planner's is_available must reflect whether the authoritative ARM profile contains the target,
+# not whether the FULL cluster can be upgraded.
+
+
+def test_is_available_true_when_arm_profile_contains_target_despite_insufficient_pool_evidence(monkeypatch):
+    """Regression: ARM profile contains target + node-pool evidence insufficient → is_available=true."""
+    # Current: 1.29.3, Target: 1.30.1
+    # Control plane can upgrade (target in ARM profile)
+    # Node pool has insufficient evidence (missing upgrades field)
+    evidence = {"systempool": {"profile_available": True, "upgrades_field_present": False, "upgrade_versions": [], "error": None}}
+    result = _plan(
+        monkeypatch,
+        _upgrades(
+            control_upgrades=[{"kubernetes_version": TARGET}],
+            pool_upgrades={"systempool": []},
+            pool_evidence=evidence,
+        ),
+    )
+    assert result["status"] == "ready_for_control_plane_only"
+    assert result["target_validation"]["is_available"] is True  # ← KEY: ARM profile contains target
+    assert result["target_validation"]["control_plane_path_supported"] is True
+    assert result["target_validation"]["node_pool_paths_supported"] is False
+    assert result["target_validation"]["node_pool_path_evidence_sufficient"] is False
+
+
+def test_is_available_false_when_arm_profile_does_not_contain_target(monkeypatch):
+    """Regression: ARM profile does not contain target → is_available=false."""
+    # Control plane upgrade NOT available in ARM profile, AND node pool not available
+    result = _plan(
+        monkeypatch,
+        _upgrades(
+            control_upgrades=[],  # Empty: target not available
+            pool_upgrades={"systempool": []},  # Node pool also doesn't have target
+            pool_evidence={"systempool": {"profile_available": True, "upgrades_field_present": True, "upgrade_versions": [], "error": None}},
+        ),
+    )
+    assert result["status"] == "blocked"
+    assert result["target_validation"]["is_available"] is False
+    assert result["target_validation"]["control_plane_path_supported"] is False
+    assert result["target_validation"]["node_pool_paths_supported"] is False
+
+
+def test_is_available_true_when_node_pool_can_upgrade_despite_control_plane_at_target(monkeypatch):
+    """Regression: Control plane at target + node pool can upgrade → is_available=true."""
+    # Current: 1.30.1 (at target), node pool also at target
+    # But one pool needs upgrade to 1.30.1 (hypothetically different version)
+    result = _plan(
+        monkeypatch,
+        _upgrades(
+            control_plane="1.30.1",  # Already at target
+            pools=[{"name": "systempool", "orchestrator_version": "1.30.0"}],  # Needs upgrade
+            control_upgrades=[{"kubernetes_version": "1.30.1"}],  # Even though CP at target
+            pool_upgrades={"systempool": [{"kubernetes_version": "1.30.1"}]},  # Pool can upgrade
+            pool_evidence={"systempool": {"profile_available": True, "upgrades_field_present": True, "upgrade_versions": ["1.30.1"], "error": None}},
+        ),
+    )
+    # Should be ready because node pool can upgrade even though control plane is at target
+    assert result["target_validation"]["is_available"] is True
+    assert result["target_validation"]["control_plane_path_supported"] is True
+
+
+def test_is_available_true_when_either_control_plane_or_node_pool_can_upgrade(monkeypatch):
+    """Regression: Either control plane OR node pool can upgrade → is_available=true."""
+    # Both paths available: control plane can upgrade, pool can upgrade
+    result = _plan(monkeypatch)
+    assert result["status"] == "ready_for_confirmation"
+    assert result["target_validation"]["is_available"] is True
+    assert result["target_validation"]["control_plane_path_supported"] is True
+    assert result["target_validation"]["node_pool_paths_supported"] is True
+
+
 def test_registry_exposes_planner():
     assert any(tool.__name__ == "aks_plan_upgrade_preparation" for tool in ALL_TOOLS)

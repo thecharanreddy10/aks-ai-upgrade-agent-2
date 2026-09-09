@@ -550,8 +550,10 @@ def aks_plan_upgrade_preparation(
                 + ", ".join(str(name) for name in unsupported_pools)
             )
 
+    # is_available reflects whether the authoritative ARM profile contains the target.
+    # It's true if either control plane OR node pools can upgrade to the target.
     target_validation["is_available"] = (
-        target_validation["control_plane_path_supported"] and target_validation["node_pool_paths_supported"]
+        target_validation["control_plane_path_supported"] or target_validation["node_pool_paths_supported"]
     )
     scope = {
         "control_plane": {
