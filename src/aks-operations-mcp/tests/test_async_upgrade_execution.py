@@ -174,3 +174,23 @@ def test_insufficient_node_pool_evidence_returns_partial_without_write(monkeypat
     assert result["status"] == "partial"
     assert result["reason_code"] == "NODE_POOL_PROFILE_INSUFFICIENT"
     assert client.agent_pools.writes == []
+
+
+def test_complete_cluster_advances_and_finishes_after_node_pool_reaches_target(monkeypatch):
+    cluster = _cluster(TARGET, "Succeeded")
+    pool = _pool("nodepool1", "1.35.1", "Succeeded")
+    client, _ = _wire(monkeypatch, cluster, pool, pool_supported=True)
+
+    first = async_upgrade.aks_execute_confirmed_upgrade(*ARGS, TARGET, confirmed_scope="complete_cluster")
+    assert first["status"] == "in_progress"
+    assert first["reason_code"] == "NODE_POOL_UPGRADE_STARTED"
+    assert len(client.agent_pools.writes) == 1
+
+    pool.orchestrator_version = TARGET
+    pool.current_orchestrator_version = TARGET
+    pool.provisioning_state = "Succeeded"
+
+    final = async_upgrade.aks_execute_confirmed_upgrade(*ARGS, TARGET, confirmed_scope="complete_cluster")
+    assert final["status"] == "completed"
+    assert final["reason_code"] == "UPGRADE_COMPLETED"
+    assert len(client.agent_pools.writes) == 1
