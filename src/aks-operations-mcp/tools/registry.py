@@ -27,8 +27,8 @@ from tools.remediate_pods import aks_remediate_pods
 from tools.remediate_storage import aks_remediate_storage
 from tools.resolve_upgrade_issue import aks_resolve_upgrade_issue
 from tools.storage import aks_check_storage
+from tools.async_upgrade import aks_execute_confirmed_upgrade
 from tools.upgrade import (
-    aks_execute_confirmed_upgrade,
     aks_get_upgrade_execution_status,
     aks_plan_upgrade_preparation,
     aks_upgrade_node_pool,
