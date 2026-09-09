@@ -167,6 +167,7 @@ def test_write_gate_requires_environment_enablement(monkeypatch):
         "pollers_created": False,
         "cluster_modified": False,
         "target_kubernetes_version": TARGET,
+        "execution_scope": "complete_cluster",
         "pre_execution_readiness": None,
         "control_plane": {"status": "not_required", "poller_status": None, "before": None, "after": None, "error": None},
         "node_pool_profile_after_control_plane": None,
@@ -267,6 +268,91 @@ def test_supported_pool_is_upgraded_after_fresh_profile(monkeypatch):
     assert result["node_pools"][0]["status"] == "succeeded"
     assert len(client.agent_pools.writes) == 1
     assert pools[0].orchestrator_version == TARGET
+
+
+# Scope Enforcement Tests
+# =====================
+# These tests validate that confirmed_scope parameter is enforced.
+# Node-pool execution requires explicit scope authorization.
+
+
+def test_control_plane_only_scope_with_supported_pool_prevents_pool_write(monkeypatch):
+    """Scope enforcement: control_plane_only + SUPPORTED pool → no nodepool write."""
+    client, _cluster_obj, pools, profiles = _wire(monkeypatch)
+    monkeypatch.setenv("AKS_UPGRADE_ENABLE_WRITE", "true")
+    result = upgrade.aks_execute_confirmed_upgrade(*ARGS, TARGET, confirmed_scope="control_plane_only")
+
+    # Control plane should succeed
+    assert result["status"] == "completed"
+    assert result["control_plane"]["status"] == "succeeded"
+    assert result["execution_scope"] == "control_plane_only"
+
+    # Node-pool execution must NOT occur, even though pool is SUPPORTED
+    assert result["reason_code"] == "CONTROL_PLANE_ONLY_SCOPE"
+    assert len(client.agent_pools.writes) == 0
+    assert result["node_pools"] == []
+    assert pools[0].orchestrator_version != TARGET  # Pool should NOT be upgraded
+
+
+def test_control_plane_only_scope_with_insufficient_pool_prevents_pool_write(monkeypatch):
+    """Scope enforcement: control_plane_only + INSUFFICIENT_EVIDENCE pool → no nodepool write."""
+    client, *_ = _wire(monkeypatch, supported=True, evidence=False)
+    monkeypatch.setenv("AKS_UPGRADE_ENABLE_WRITE", "true")
+    result = upgrade.aks_execute_confirmed_upgrade(*ARGS, TARGET, confirmed_scope="control_plane_only")
+
+    assert result["status"] == "completed"
+    assert result["control_plane"]["status"] == "succeeded"
+    assert result["execution_scope"] == "control_plane_only"
+    assert result["reason_code"] == "CONTROL_PLANE_ONLY_SCOPE"
+    assert len(client.agent_pools.writes) == 0
+    assert result["node_pools"] == []
+
+
+def test_control_plane_only_scope_with_unsupported_pool_prevents_pool_write(monkeypatch):
+    """Scope enforcement: control_plane_only + UNSUPPORTED pool → no nodepool write."""
+    client, *_ = _wire(monkeypatch, supported=False, evidence=True)
+    monkeypatch.setenv("AKS_UPGRADE_ENABLE_WRITE", "true")
+    result = upgrade.aks_execute_confirmed_upgrade(*ARGS, TARGET, confirmed_scope="control_plane_only")
+
+    assert result["status"] == "completed"
+    assert result["control_plane"]["status"] == "succeeded"
+    assert result["execution_scope"] == "control_plane_only"
+    assert result["reason_code"] == "CONTROL_PLANE_ONLY_SCOPE"
+    assert len(client.agent_pools.writes) == 0
+    assert result["node_pools"] == []
+
+
+def test_complete_cluster_scope_with_supported_pool_allows_pool_write(monkeypatch):
+    """Scope enforcement: complete_cluster + SUPPORTED pool → nodepool write allowed."""
+    client, _cluster_obj, pools, profiles = _wire(monkeypatch)
+    monkeypatch.setenv("AKS_UPGRADE_ENABLE_WRITE", "true")
+    result = upgrade.aks_execute_confirmed_upgrade(*ARGS, TARGET, confirmed_scope="complete_cluster")
+
+    # Both control plane and node pool should succeed
+    assert result["status"] == "completed"
+    assert result["control_plane"]["status"] == "succeeded"
+    assert result["execution_scope"] == "complete_cluster"
+
+    # Node-pool write MUST occur when scope is complete_cluster
+    assert result["node_pools"][0]["path_status"] == "SUPPORTED"
+    assert result["node_pools"][0]["status"] == "succeeded"
+    assert len(client.agent_pools.writes) == 1
+    assert pools[0].orchestrator_version == TARGET
+
+
+def test_default_scope_is_complete_cluster(monkeypatch):
+    """Default confirmed_scope should be complete_cluster."""
+    client, _cluster_obj, pools, profiles = _wire(monkeypatch)
+    monkeypatch.setenv("AKS_UPGRADE_ENABLE_WRITE", "true")
+    result = upgrade.aks_execute_confirmed_upgrade(*ARGS, TARGET)
+
+    # Default behavior (complete_cluster) should allow node-pool execution
+    assert result["status"] == "completed"
+    assert result["control_plane"]["status"] == "succeeded"
+    assert result["execution_scope"] == "complete_cluster"
+    assert result["node_pools"][0]["path_status"] == "SUPPORTED"
+    assert len(client.agent_pools.writes) == 1
+
 
 
 @pytest.mark.parametrize("supported,evidence,status", [(False, True, "UNSUPPORTED"), (True, False, "INSUFFICIENT_EVIDENCE")])

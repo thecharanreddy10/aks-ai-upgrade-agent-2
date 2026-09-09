@@ -49,12 +49,18 @@ def aks_execute_confirmed_upgrade(
     maintenance_window_start_utc: str | None = None,
     maintenance_window_end_utc: str | None = None,
     check_mode: str = "full",
+    confirmed_scope: str = "complete_cluster",
 ) -> dict[str, Any]:
     """Execute a previously user-confirmed AKS upgrade and verify its outcome.
 
     This tool has no application approval parameter. The calling agent must obtain
     explicit user confirmation before invoking it; the server still enforces full
     checks and its write-enable environment gate.
+
+    Args:
+        confirmed_scope: The user-confirmed execution scope. Either "complete_cluster" (control plane
+            and node pools if SUPPORTED) or "control_plane_only" (control plane only, no node-pool
+            writes regardless of profile state). Node-pool execution requires explicit scope authorization.
     """
     result = _execution_result(target_kubernetes_version)
     gate_blocker = _upgrade_write_gate_blocker(check_mode)
@@ -152,6 +158,18 @@ def aks_execute_confirmed_upgrade(
     else:
         result["control_plane"]["status"] = "not_required"
         result["control_plane"]["after"] = result["control_plane"]["before"]
+
+    # Enforce execution scope: do not perform node-pool writes if scope is "control_plane_only".
+    if confirmed_scope == "control_plane_only":
+        result["node_pool_profile_after_control_plane"] = None
+        result["node_pools"] = []
+        result["execution_scope"] = "control_plane_only"
+        return _finish_execution(
+            result, "completed", [], [],
+            blocked_stage=None,
+            reason_code="CONTROL_PLANE_ONLY_SCOPE",
+            message="Control-plane upgrade completed. Node-pool execution was outside the confirmed scope.",
+        )
 
     # Azure may expose a pool path only after the control-plane operation. Never reuse Phase 1 data.
     refreshed_upgrades = aks_get_available_upgrades(
@@ -336,6 +354,7 @@ def _execution_result(target: str) -> dict[str, Any]:
         "pollers_created": False,
         "cluster_modified": False,
         "target_kubernetes_version": target,
+        "execution_scope": "complete_cluster",
         "pre_execution_readiness": None,
         "control_plane": {"status": "not_required", "poller_status": None, "before": None, "after": None, "error": None},
         "node_pool_profile_after_control_plane": None,
