@@ -140,10 +140,10 @@ def aks_execute_confirmed_upgrade(
             "control_plane_execution",
         )
 
-    # Control plane is already at target. For control-plane-only approval, the workflow is complete.
+    # Control plane is already at target. For control-plane-only approval, verify only the control plane.
     if confirmed_scope == "control_plane_only":
         verification = _safe_post_execution_snapshot(
-            subscription_id, resource_group, cluster_name, target_kubernetes_version
+            subscription_id, resource_group, cluster_name, target_kubernetes_version, include_node_pools=False
         )
         result["post_upgrade_verification"] = verification
         if not verification["is_successful"]:
@@ -286,7 +286,7 @@ def aks_execute_confirmed_upgrade(
         )
 
     verification = _safe_post_execution_snapshot(
-        subscription_id, resource_group, cluster_name, target_kubernetes_version
+        subscription_id, resource_group, cluster_name, target_kubernetes_version, include_node_pools=True
     )
     result["post_upgrade_verification"] = verification
     if not verification["is_successful"]:
@@ -313,16 +313,19 @@ def _safe_post_execution_snapshot(
     resource_group: str,
     cluster_name: str,
     target: str,
+    *,
+    include_node_pools: bool,
 ) -> dict[str, Any]:
     try:
         cluster = aks_get_cluster_details(subscription_id, resource_group, cluster_name)
-        pools = aks_get_node_pools(subscription_id, resource_group, cluster_name)
+        pools = aks_get_node_pools(subscription_id, resource_group, cluster_name) if include_node_pools else {"node_pools": []}
         if cluster.get("kubernetes_version") != target or cluster.get("provisioning_state") != "Succeeded":
             return {"is_successful": False, "message": "Control plane is not yet at the target version with Succeeded provisioning state."}
-        for pool in pools.get("node_pools", []):
-            if pool.get("orchestrator_version") != target or pool.get("provisioning_state") != "Succeeded":
-                return {"is_successful": False, "message": f"Node pool '{pool.get('name')}' is not yet at the target version with Succeeded provisioning state."}
-        return {"is_successful": True, "message": "Final version and provisioning-state verification succeeded.", "cluster": cluster, "node_pools": pools}
+        if include_node_pools:
+            for pool in pools.get("node_pools", []):
+                if pool.get("orchestrator_version") != target or pool.get("provisioning_state") != "Succeeded":
+                    return {"is_successful": False, "message": f"Node pool '{pool.get('name')}' is not yet at the target version with Succeeded provisioning state."}
+        return {"is_successful": True, "message": "Final version and provisioning-state verification succeeded.", "cluster": cluster, "node_pools": pools.get("node_pools", [])}
     except Exception as exc:  # noqa: BLE001
         return {"is_successful": False, "message": str(exc)}
 
