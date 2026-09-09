@@ -286,7 +286,7 @@ def aks_check_single_replica_services(
     """
     if namespace is not None:
         validate_namespace(namespace)
-    if label_selector is None:
+    if namespace is None and label_selector is None:
         return {
             "status": "NOT_CONFIGURED",
             "scope": namespace or "all-namespaces",
@@ -295,7 +295,8 @@ def aks_check_single_replica_services(
             "query_errors": [],
             "recommendation": "Configure a Cerebral Plus namespace and/or label selector before using this check.",
         }
-    _validate_selector(label_selector)
+    if label_selector is not None:
+        _validate_selector(label_selector)
 
     scope = _scope_flag(namespace)
     selector = f"-l {label_selector}" if label_selector else ""
@@ -334,7 +335,7 @@ def aks_check_single_replica_services(
             if replicas == 1:
                 single_replica_workloads.append(entry)
 
-    status = "WARNING" if single_replica_workloads else ("INCOMPLETE" if query_errors else "PASS")
+    status = "INCOMPLETE" if query_errors else ("WARNING" if single_replica_workloads else "PASS")
     return {
         "status": status,
         "scope": namespace or "all-namespaces",
@@ -482,6 +483,13 @@ def _parse_max_surge(value: Any, node_count: int) -> dict[str, Any]:
     return {"raw": raw, "kind": "count", "surge_nodes": surge_nodes}
 
 
+def _is_user_node_pool(pool: Any) -> bool:
+    """Match User pools across Azure SDK enum and string representations."""
+    mode = getattr(pool, "mode", None)
+    mode_value = getattr(mode, "value", mode)
+    return str(mode_value).lower() == "user"
+
+
 def aks_check_node_pool_surge(
     subscription_id: str,
     resource_group: str,
@@ -494,7 +502,7 @@ def aks_check_node_pool_surge(
 
     client = get_container_service_client(subscription_id)
     pools = list(client.agent_pools.list(resource_group, cluster_name))
-    selected = [pool for pool in pools if getattr(pool, "mode", None) == "User"]
+    selected = [pool for pool in pools if _is_user_node_pool(pool)]
     if node_pool_name is not None:
         selected = [pool for pool in selected if getattr(pool, "name", None) == node_pool_name]
 
@@ -532,7 +540,7 @@ def aks_check_node_pool_surge(
             })
 
     if not selected:
-        status = "NOT_FOUND" if node_pool_name else "PASS"
+        status = "NOT_FOUND" if node_pool_name else "INCOMPLETE"
     elif recommendations:
         status = "WARNING"
     else:

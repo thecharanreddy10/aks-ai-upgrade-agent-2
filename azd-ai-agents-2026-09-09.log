@@ -1,0 +1,409 @@
+[2026-09-09T06:43:03Z] Retry: =====> Try=1 for GET https://management.azure.com/subscriptions/bb0e2c9e-d7fb-45e4-92cf-654f380e6388/resourceGroups/rg-agent-framework-agent-with-foundry-toolbox-responses-dev-526c3b27/providers/Microsoft.CognitiveServices/accounts/cog-vtjc46vefyyj6/projects/agent-framework-agent-with-found?api-version=2025-06-01
+[2026-09-09T06:43:03Z] Authentication: AzureDeveloperCLICredential.GetToken() acquired a token for scope "https://management.core.windows.net//.default"
+[2026-09-09T06:43:03Z] Request: ==> OUTGOING REQUEST (Try=1)
+   GET https://management.azure.com/subscriptions/bb0e2c9e-d7fb-45e4-92cf-654f380e6388/resourceGroups/rg-agent-framework-agent-with-foundry-toolbox-responses-dev-526c3b27/providers/Microsoft.CognitiveServices/accounts/cog-vtjc46vefyyj6/projects/agent-framework-agent-with-found?api-version=2025-06-01
+   Accept: application/json
+   Authorization: REDACTED
+   User-Agent: azsdk-go-armcognitiveservices/v2.0.0 (go1.26.4-X:loopvar; Windows_NT),azd-ext-azure-ai-agents/1.0.0-beta.12
+   X-Ms-Correlation-Request-Id: 9a5e5304-fed6-3647-fa4e-0cf91a5524da
+
+[2026-09-09T06:43:04Z] Response: ==> REQUEST/RESPONSE (Try=1/644.2477ms, OpTime=647.3193ms) -- RESPONSE RECEIVED
+   GET https://management.azure.com/subscriptions/bb0e2c9e-d7fb-45e4-92cf-654f380e6388/resourceGroups/rg-agent-framework-agent-with-foundry-toolbox-responses-dev-526c3b27/providers/Microsoft.CognitiveServices/accounts/cog-vtjc46vefyyj6/projects/agent-framework-agent-with-found?api-version=2025-06-01
+   Accept: application/json
+   Authorization: REDACTED
+   User-Agent: azsdk-go-armcognitiveservices/v2.0.0 (go1.26.4-X:loopvar; Windows_NT),azd-ext-azure-ai-agents/1.0.0-beta.12
+   X-Ms-Correlation-Request-Id: 9a5e5304-fed6-3647-fa4e-0cf91a5524da
+   --------------------------------------------------------------------------------
+   RESPONSE Status: 200 OK
+   Cache-Control: no-cache
+   Content-Length: 1431
+   Content-Type: application/json; charset=utf-8
+   Date: Wed, 09 Sep 2026 06:43:04 GMT
+   Etag: "b60134a6-0000-0200-0000-6a968ac40000"
+   Expires: -1
+   Pragma: no-cache
+   Strict-Transport-Security: REDACTED
+   X-Cache: REDACTED
+   X-Content-Type-Options: REDACTED
+   X-Envoy-Upstream-Service-Time: REDACTED
+   X-Ms-Correlation-Request-Id: 9a5e5304-fed6-3647-fa4e-0cf91a5524da
+   X-Ms-Ratelimit-Remaining-Subscription-Global-Reads: REDACTED
+   X-Ms-Ratelimit-Remaining-Subscription-Reads: REDACTED
+   X-Ms-Request-Id: 74cde32c-2cf5-4ff6-a5b6-dcf912bc6aa4
+   X-Ms-Routing-Request-Id: REDACTED
+   X-Msedge-Ref: REDACTED
+
+[2026-09-09T06:43:04Z] Retry: response 200
+[2026-09-09T06:43:04Z] Retry: exit due to non-retriable status code
+[2026-09-09T06:43:04Z] Retry: =====> Try=1 for GET https://graph.microsoft.com/v1.0/me
+[2026-09-09T06:43:05Z] Authentication: AzureDeveloperCLICredential.GetToken() acquired a token for scope "https://graph.microsoft.com/.default"
+[2026-09-09T06:43:05Z] Request: ==> OUTGOING REQUEST (Try=1)
+   GET https://graph.microsoft.com/v1.0/me
+   Authorization: REDACTED
+   User-Agent: azsdk-go-graph/1.0.0 (go1.26.4-X:loopvar; Windows_NT)
+
+[2026-09-09T06:43:05Z] Response: ==> REQUEST/RESPONSE (Try=1/149.4203ms, OpTime=149.4203ms) -- RESPONSE RECEIVED
+   GET https://graph.microsoft.com/v1.0/me
+   Authorization: REDACTED
+   User-Agent: azsdk-go-graph/1.0.0 (go1.26.4-X:loopvar; Windows_NT)
+   --------------------------------------------------------------------------------
+   RESPONSE Status: 200 OK
+   Cache-Control: no-cache
+   Client-Request-Id: REDACTED
+   Content-Type: application/json;odata.metadata=minimal;odata.streaming=true;IEEE754Compatible=false;charset=utf-8
+   Date: Wed, 09 Sep 2026 06:43:04 GMT
+   Odata-Version: REDACTED
+   Request-Id: 8aa9cf89-2d01-44f0-af95-97088719f42e
+   Strict-Transport-Security: REDACTED
+   Vary: REDACTED
+   X-Ms-Ags-Diagnostic: REDACTED
+   X-Ms-Resource-Unit: REDACTED
+
+[2026-09-09T06:43:05Z] Retry: response 200
+[2026-09-09T06:43:05Z] Retry: exit due to non-retriable status code
+[2026-09-09T06:43:05Z] Retry: =====> Try=1 for GET https://management.azure.com/subscriptions/bb0e2c9e-d7fb-45e4-92cf-654f380e6388/resourceGroups/rg-agent-framework-agent-with-foundry-toolbox-responses-dev-526c3b27/providers/Microsoft.CognitiveServices/accounts/cog-vtjc46vefyyj6/projects/agent-framework-agent-with-found/providers/Microsoft.Authorization/roleAssignments?%24filter=REDACTED&api-version=2022-04-01
+[2026-09-09T06:43:06Z] Authentication: AzureDeveloperCLICredential.GetToken() acquired a token for scope "https://management.core.windows.net//.default"
+[2026-09-09T06:43:06Z] Request: ==> OUTGOING REQUEST (Try=1)
+   GET https://management.azure.com/subscriptions/bb0e2c9e-d7fb-45e4-92cf-654f380e6388/resourceGroups/rg-agent-framework-agent-with-foundry-toolbox-responses-dev-526c3b27/providers/Microsoft.CognitiveServices/accounts/cog-vtjc46vefyyj6/projects/agent-framework-agent-with-found/providers/Microsoft.Authorization/roleAssignments?%24filter=REDACTED&api-version=2022-04-01
+   Accept: application/json
+   Authorization: REDACTED
+   User-Agent: azsdk-go-armauthorization/v3.0.0-beta.2 (go1.26.4-X:loopvar; Windows_NT)
+
+[2026-09-09T06:43:06Z] Response: ==> REQUEST/RESPONSE (Try=1/861.4666ms, OpTime=861.4666ms) -- RESPONSE RECEIVED
+   GET https://management.azure.com/subscriptions/bb0e2c9e-d7fb-45e4-92cf-654f380e6388/resourceGroups/rg-agent-framework-agent-with-foundry-toolbox-responses-dev-526c3b27/providers/Microsoft.CognitiveServices/accounts/cog-vtjc46vefyyj6/projects/agent-framework-agent-with-found/providers/Microsoft.Authorization/roleAssignments?%24filter=REDACTED&api-version=2022-04-01
+   Accept: application/json
+   Authorization: REDACTED
+   User-Agent: azsdk-go-armauthorization/v3.0.0-beta.2 (go1.26.4-X:loopvar; Windows_NT)
+   --------------------------------------------------------------------------------
+   RESPONSE Status: 200 OK
+   Cache-Control: no-cache
+   Content-Length: 3229
+   Content-Type: application/json; charset=utf-8
+   Date: Wed, 09 Sep 2026 06:43:06 GMT
+   Expires: -1
+   Pragma: no-cache
+   Strict-Transport-Security: REDACTED
+   X-Cache: REDACTED
+   X-Content-Type-Options: REDACTED
+   X-Ms-Correlation-Request-Id: REDACTED
+   X-Ms-Operation-Identifier: REDACTED
+   X-Ms-Ratelimit-Remaining-Subscription-Global-Reads: REDACTED
+   X-Ms-Ratelimit-Remaining-Subscription-Reads: REDACTED
+   X-Ms-Request-Id: 73aaf589-0820-4a5a-8c12-0bc5776d1077
+   X-Ms-Routing-Request-Id: REDACTED
+   X-Msedge-Ref: REDACTED
+
+[2026-09-09T06:43:06Z] Retry: response 200
+[2026-09-09T06:43:06Z] Retry: exit due to non-retriable status code
+[2026-09-09T06:43:06Z] Retry: =====> Try=1 for GET https://management.azure.com/subscriptions/bb0e2c9e-d7fb-45e4-92cf-654f380e6388/resourceGroups/rg-agent-framework-agent-with-foundry-toolbox-responses-dev-526c3b27/providers/Microsoft.CognitiveServices/accounts/cog-vtjc46vefyyj6/projects/agent-framework-agent-with-found/providers/Microsoft.Authorization/roleAssignments?%24filter=REDACTED&api-version=2022-04-01
+[2026-09-09T06:43:07Z] Authentication: AzureDeveloperCLICredential.GetToken() acquired a token for scope "https://management.core.windows.net//.default"
+[2026-09-09T06:43:07Z] Request: ==> OUTGOING REQUEST (Try=1)
+   GET https://management.azure.com/subscriptions/bb0e2c9e-d7fb-45e4-92cf-654f380e6388/resourceGroups/rg-agent-framework-agent-with-foundry-toolbox-responses-dev-526c3b27/providers/Microsoft.CognitiveServices/accounts/cog-vtjc46vefyyj6/projects/agent-framework-agent-with-found/providers/Microsoft.Authorization/roleAssignments?%24filter=REDACTED&api-version=2022-04-01
+   Accept: application/json
+   Authorization: REDACTED
+   User-Agent: azsdk-go-armauthorization/v3.0.0-beta.2 (go1.26.4-X:loopvar; Windows_NT)
+
+[2026-09-09T06:43:07Z] Response: ==> REQUEST/RESPONSE (Try=1/251.3629ms, OpTime=251.3629ms) -- RESPONSE RECEIVED
+   GET https://management.azure.com/subscriptions/bb0e2c9e-d7fb-45e4-92cf-654f380e6388/resourceGroups/rg-agent-framework-agent-with-foundry-toolbox-responses-dev-526c3b27/providers/Microsoft.CognitiveServices/accounts/cog-vtjc46vefyyj6/projects/agent-framework-agent-with-found/providers/Microsoft.Authorization/roleAssignments?%24filter=REDACTED&api-version=2022-04-01
+   Accept: application/json
+   Authorization: REDACTED
+   User-Agent: azsdk-go-armauthorization/v3.0.0-beta.2 (go1.26.4-X:loopvar; Windows_NT)
+   --------------------------------------------------------------------------------
+   RESPONSE Status: 200 OK
+   Cache-Control: no-cache
+   Content-Length: 3229
+   Content-Type: application/json; charset=utf-8
+   Date: Wed, 09 Sep 2026 06:43:07 GMT
+   Expires: -1
+   Pragma: no-cache
+   Strict-Transport-Security: REDACTED
+   X-Cache: REDACTED
+   X-Content-Type-Options: REDACTED
+   X-Ms-Correlation-Request-Id: REDACTED
+   X-Ms-Operation-Identifier: REDACTED
+   X-Ms-Ratelimit-Remaining-Subscription-Global-Reads: REDACTED
+   X-Ms-Ratelimit-Remaining-Subscription-Reads: REDACTED
+   X-Ms-Request-Id: 5daed4f8-5ba8-46a8-9c13-251dd3c9ff97
+   X-Ms-Routing-Request-Id: REDACTED
+   X-Msedge-Ref: REDACTED
+
+[2026-09-09T06:43:07Z] Retry: response 200
+[2026-09-09T06:43:07Z] Retry: exit due to non-retriable status code
+[2026-09-09T06:43:08Z] Authentication: AzureDeveloperCLICredential.GetToken() acquired a token for scope "https://ai.azure.com/.default"
+[2026-09-09T06:43:08Z] Retry: =====> Try=1 for GET https://cog-vtjc46vefyyj6.services.ai.azure.com/api/projects/agent-framework-agent-with-found/agents/agent-framework-agent-with-foundry-toolbox-responses?api-version=v1
+[2026-09-09T06:43:08Z] Request: ==> OUTGOING REQUEST (Try=1)
+   GET https://cog-vtjc46vefyyj6.services.ai.azure.com/api/projects/agent-framework-agent-with-found/agents/agent-framework-agent-with-foundry-toolbox-responses?api-version=v1
+   Authorization: REDACTED
+   User-Agent: azsdk-go-azure-ai-agents/v1.0.0 (go1.26.4-X:loopvar; Windows_NT),azd-ext-azure-ai-agents/1.0.0-beta.12
+   X-Ms-Correlation-Request-Id: 9a5e5304-fed6-3647-fa4e-0cf91a5524da
+   Request contained no body
+
+[2026-09-09T06:43:09Z] Response: ==> REQUEST/RESPONSE (Try=1/1.3334843s, OpTime=1.3334843s) -- RESPONSE RECEIVED
+   GET https://cog-vtjc46vefyyj6.services.ai.azure.com/api/projects/agent-framework-agent-with-found/agents/agent-framework-agent-with-foundry-toolbox-responses?api-version=v1
+   Authorization: REDACTED
+   User-Agent: azsdk-go-azure-ai-agents/v1.0.0 (go1.26.4-X:loopvar; Windows_NT),azd-ext-azure-ai-agents/1.0.0-beta.12
+   X-Ms-Correlation-Request-Id: 9a5e5304-fed6-3647-fa4e-0cf91a5524da
+   --------------------------------------------------------------------------------
+   RESPONSE Status: 200 OK
+   Access-Control-Expose-Headers: REDACTED
+   Api-Supported-Versions: REDACTED
+   Apim-Request-Id: REDACTED
+   Azureml-Served-By-Cluster: REDACTED
+   Content-Type: application/json; charset=utf-8
+   Date: Wed, 09 Sep 2026 06:43:09 GMT
+   Request-Context: REDACTED
+   Strict-Transport-Security: REDACTED
+   Vary: REDACTED
+   X-Content-Type-Options: REDACTED
+   X-Ms-Region: REDACTED
+   X-Ms-Response-Type: REDACTED
+   X-Request-Id: 5e7c44bef99e9d6b92432a85f798cc11
+   --------------------------------------------------------------------------------
+{
+  "object": "agent",
+  "id": "agent-framework-agent-with-foundry-toolbox-responses",
+  "name": "agent-framework-agent-with-foundry-toolbox-responses",
+  "state": "enabled",
+  "versions": {
+    "latest": {
+      "metadata": {
+        "enableVnextExperience": "true",
+        "toolbox_name": "aks-agent-tools-v2",
+        "toolbox_version": "1",
+        "toolsetid": "aks-agent-tools-v2:1"
+      },
+      "object": "agent.version",
+      "id": "agent-framework-agent-with-foundry-toolbox-responses:10",
+      "name": "agent-framework-agent-with-foundry-toolbox-responses",
+      "version": "10",
+      "description": "",
+      "created_at": 1788893617,
+      "definition": {
+        "kind": "hosted",
+        "container_protocol_versions": [],
+        "cpu": "0.5",
+        "memory": "1Gi",
+        "environment_variables": {
+          "AZURE_AI_MODEL_DEPLOYMENT_NAME": "gpt-5-mini",
+          "TOOLBOX_ENDPOINT": "https://cog-vtjc46vefyyj6.services.ai.azure.com/api/projects/agent-framework-agent-with-found/toolboxes/aks-agent-tools-v2/versions/1/mcp?api-version=v1"
+        },
+        "protocol_versions": [
+          {
+            "protocol": "responses",
+            "version": "2.0.0"
+          }
+        ],
+        "code_configuration": {
+          "runtime": "python_3_13",
+          "entry_point": [
+            "python",
+            "main.py"
+          ],
+          "dependency_resolution": "remote_build",
+          "content_hash": "c7be8ea91236bd1b96f482ca1f070fda4bc7a98cf010ee04048fde25ac101cdc"
+        }
+      },
+      "draft": false,
+      "status": "active",
+      "instance_identity": {
+        "principal_id": "9e5aa7d1-a77e-45d5-ab0f-9b316acfc0da",
+        "client_id": "9e5aa7d1-a77e-45d5-ab0f-9b316acfc0da",
+        "status": "active"
+      },
+      "blueprint": {
+        "principal_id": "6e405374-f50e-40d7-a5d8-3c0d1604af18",
+        "client_id": "83f886f0-3c67-443b-840a-ed26916f5ed6",
+        "status": "active"
+      },
+      "blueprint_reference": {
+        "type": "ManagedAgentIdentityBlueprint",
+        "blueprint_id": "agent-framework-agent-with-foundry-toolbox-responses-58623"
+      },
+      "agent_guid": "58623eee-136a-41ee-8204-2332dbfb3bda"
+    }
+  },
+  "agent_endpoint": {
+    "version_selector": {
+      "version_selection_rules": [
+        {
+          "type": "FixedRatio",
+          "agent_version": "@latest",
+          "traffic_percentage": 100
+        }
+      ]
+    },
+    "protocols": [
+      "responses"
+    ],
+    "protocol_configuration": {
+      "responses": {}
+    },
+    "authorization_schemes": [
+      {
+        "type": "Entra"
+      }
+    ],
+    "publish_approval_status": "not_published"
+  },
+  "instance_identity": {
+    "principal_id": "9e5aa7d1-a77e-45d5-ab0f-9b316acfc0da",
+    "client_id": "9e5aa7d1-a77e-45d5-ab0f-9b316acfc0da",
+    "status": "active"
+  },
+  "blueprint": {
+    "principal_id": "6e405374-f50e-40d7-a5d8-3c0d1604af18",
+    "client_id": "83f886f0-3c67-443b-840a-ed26916f5ed6",
+    "status": "active"
+  },
+  "blueprint_reference": {
+    "type": "ManagedAgentIdentityBlueprint",
+    "blueprint_id": "agent-framework-agent-with-foundry-toolbox-responses-58623"
+  },
+  "configuration_state": "enabled"
+}
+   --------------------------------------------------------------------------------
+
+[2026-09-09T06:43:09Z] Retry: response 200
+[2026-09-09T06:43:09Z] Retry: exit due to non-retriable status code
+[2026-09-09T06:43:09Z] Retry: =====> Try=1 for POST https://cog-vtjc46vefyyj6.services.ai.azure.com/api/projects/agent-framework-agent-with-found/agents/agent-framework-agent-with-foundry-toolbox-responses?api-version=v1
+[2026-09-09T06:43:09Z] Request: ==> OUTGOING REQUEST (Try=1)
+   POST https://cog-vtjc46vefyyj6.services.ai.azure.com/api/projects/agent-framework-agent-with-found/agents/agent-framework-agent-with-foundry-toolbox-responses?api-version=v1
+   Authorization: REDACTED
+   Content-Length: 10980
+   Content-Type: multipart/form-data; boundary=17eece366c5193b6661683adfd4dc55799e7a049e68d997075730c9b4107
+   User-Agent: azsdk-go-azure-ai-agents/v1.0.0 (go1.26.4-X:loopvar; Windows_NT),azd-ext-azure-ai-agents/1.0.0-beta.12
+   X-Ms-Code-Zip-Sha256: REDACTED
+   X-Ms-Correlation-Request-Id: 9a5e5304-fed6-3647-fa4e-0cf91a5524da
+   Skip logging body for multipart/form-data; boundary=17eece366c5193b6661683adfd4dc55799e7a049e68d997075730c9b4107
+
+[2026-09-09T06:43:10Z] Response: ==> REQUEST/RESPONSE (Try=1/412.2111ms, OpTime=412.2111ms) -- RESPONSE RECEIVED
+   POST https://cog-vtjc46vefyyj6.services.ai.azure.com/api/projects/agent-framework-agent-with-found/agents/agent-framework-agent-with-foundry-toolbox-responses?api-version=v1
+   Authorization: REDACTED
+   Content-Length: 10980
+   Content-Type: multipart/form-data; boundary=17eece366c5193b6661683adfd4dc55799e7a049e68d997075730c9b4107
+   User-Agent: azsdk-go-azure-ai-agents/v1.0.0 (go1.26.4-X:loopvar; Windows_NT),azd-ext-azure-ai-agents/1.0.0-beta.12
+   X-Ms-Code-Zip-Sha256: REDACTED
+   X-Ms-Correlation-Request-Id: 9a5e5304-fed6-3647-fa4e-0cf91a5524da
+   --------------------------------------------------------------------------------
+   RESPONSE Status: 200 OK
+   Access-Control-Expose-Headers: REDACTED
+   Api-Supported-Versions: REDACTED
+   Apim-Request-Id: REDACTED
+   Azureml-Served-By-Cluster: REDACTED
+   Content-Type: application/json; charset=utf-8
+   Date: Wed, 09 Sep 2026 06:43:09 GMT
+   Request-Context: REDACTED
+   Strict-Transport-Security: REDACTED
+   Vary: REDACTED
+   X-Content-Type-Options: REDACTED
+   X-Ms-Region: REDACTED
+   X-Ms-Response-Type: REDACTED
+   X-Request-Id: 53a30d42af1ffcb8c3d63f137615d81d
+   --------------------------------------------------------------------------------
+{
+  "object": "agent",
+  "id": "agent-framework-agent-with-foundry-toolbox-responses",
+  "name": "agent-framework-agent-with-foundry-toolbox-responses",
+  "state": "enabled",
+  "versions": {
+    "latest": {
+      "metadata": {
+        "enableVnextExperience": "true",
+        "toolbox_name": "aks-agent-tools-v2",
+        "toolbox_version": "1",
+        "toolsetid": "aks-agent-tools-v2:1"
+      },
+      "object": "agent.version",
+      "id": "agent-framework-agent-with-foundry-toolbox-responses:10",
+      "name": "agent-framework-agent-with-foundry-toolbox-responses",
+      "version": "10",
+      "description": "",
+      "created_at": 1788893617,
+      "definition": {
+        "kind": "hosted",
+        "container_protocol_versions": [],
+        "cpu": "0.5",
+        "memory": "1Gi",
+        "environment_variables": {
+          "AZURE_AI_MODEL_DEPLOYMENT_NAME": "gpt-5-mini",
+          "TOOLBOX_ENDPOINT": "https://cog-vtjc46vefyyj6.services.ai.azure.com/api/projects/agent-framework-agent-with-found/toolboxes/aks-agent-tools-v2/versions/1/mcp?api-version=v1"
+        },
+        "protocol_versions": [
+          {
+            "protocol": "responses",
+            "version": "2.0.0"
+          }
+        ],
+        "code_configuration": {
+          "runtime": "python_3_13",
+          "entry_point": [
+            "python",
+            "main.py"
+          ],
+          "dependency_resolution": "remote_build",
+          "content_hash": "c7be8ea91236bd1b96f482ca1f070fda4bc7a98cf010ee04048fde25ac101cdc"
+        }
+      },
+      "draft": false,
+      "status": "active",
+      "instance_identity": {
+        "principal_id": "9e5aa7d1-a77e-45d5-ab0f-9b316acfc0da",
+        "client_id": "9e5aa7d1-a77e-45d5-ab0f-9b316acfc0da",
+        "status": "active"
+      },
+      "blueprint": {
+        "principal_id": "6e405374-f50e-40d7-a5d8-3c0d1604af18",
+        "client_id": "83f886f0-3c67-443b-840a-ed26916f5ed6",
+        "status": "active"
+      },
+      "blueprint_reference": {
+        "type": "ManagedAgentIdentityBlueprint",
+        "blueprint_id": "agent-framework-agent-with-foundry-toolbox-responses-58623"
+      },
+      "agent_guid": "58623eee-136a-41ee-8204-2332dbfb3bda"
+    }
+  },
+  "agent_endpoint": {
+    "version_selector": {
+      "version_selection_rules": [
+        {
+          "type": "FixedRatio",
+          "agent_version": "@latest",
+          "traffic_percentage": 100
+        }
+      ]
+    },
+    "protocols": [
+      "responses"
+    ],
+    "protocol_configuration": {
+      "responses": {}
+    },
+    "authorization_schemes": [
+      {
+        "type": "Entra"
+      }
+    ],
+    "publish_approval_status": "not_published"
+  },
+  "instance_identity": {
+    "principal_id": "9e5aa7d1-a77e-45d5-ab0f-9b316acfc0da",
+    "client_id": "9e5aa7d1-a77e-45d5-ab0f-9b316acfc0da",
+    "status": "active"
+  },
+  "blueprint": {
+    "principal_id": "6e405374-f50e-40d7-a5d8-3c0d1604af18",
+    "client_id": "83f886f0-3c67-443b-840a-ed26916f5ed6",
+    "status": "active"
+  },
+  "blueprint_reference": {
+    "type": "ManagedAgentIdentityBlueprint",
+    "blueprint_id": "agent-framework-agent-with-foundry-toolbox-responses-58623"
+  },
+  "configuration_state": "enabled"
+}
+   --------------------------------------------------------------------------------
+
+[2026-09-09T06:43:10Z] Retry: response 200
+[2026-09-09T06:43:10Z] Retry: exit due to non-retriable status code
+2026/09/09 06:43:10 postdeploy: no optimization candidate for agent-framework-agent-with-foundry-toolbox-responses, skipping

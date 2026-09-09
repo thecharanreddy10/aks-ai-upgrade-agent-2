@@ -72,11 +72,17 @@ def aks_get_node_pools(subscription_id: str, resource_group: str, cluster_name: 
     }
 
 
-def aks_get_available_upgrades(subscription_id: str, resource_group: str, cluster_name: str) -> dict[str, Any]:
+def aks_get_available_upgrades(
+    subscription_id: str,
+    resource_group: str,
+    cluster_name: str,
+    include_upgrade_profiles: bool = False,
+) -> dict[str, Any]:
     """Return available Kubernetes and node image upgrade paths.
 
     By default this returns a fast, non-blocking payload with current versions.
-    Set ENABLE_UPGRADE_PROFILE_LOOKUP=true to query ARM upgrade-profile APIs.
+    Set ``include_upgrade_profiles=True`` (or
+    ``ENABLE_UPGRADE_PROFILE_LOOKUP=true``) to query ARM upgrade-profile APIs.
     """
     client = get_container_service_client(subscription_id)
     cluster = client.managed_clusters.get(resource_group, cluster_name)
@@ -84,6 +90,7 @@ def aks_get_available_upgrades(subscription_id: str, resource_group: str, cluste
 
     cluster_upgrades = []
     node_pool_upgrades: dict[str, list[dict[str, Any]]] = {}
+    node_pool_upgrade_profile_evidence: dict[str, dict[str, Any]] = {}
     current_node_pools = [
         {
             "name": pool.name,
@@ -93,7 +100,10 @@ def aks_get_available_upgrades(subscription_id: str, resource_group: str, cluste
         for pool in pools
     ]
 
-    lookup_enabled = os.getenv("ENABLE_UPGRADE_PROFILE_LOOKUP", "false").lower() == "true"
+    lookup_enabled = (
+        include_upgrade_profiles
+        or os.getenv("ENABLE_UPGRADE_PROFILE_LOOKUP", "false").lower() == "true"
+    )
 
     if not lookup_enabled:
         return {
@@ -106,6 +116,7 @@ def aks_get_available_upgrades(subscription_id: str, resource_group: str, cluste
             "current_node_pools": current_node_pools,
             "control_plane_upgrades": cluster_upgrades,
             "node_pool_upgrades": node_pool_upgrades,
+            "node_pool_upgrade_profile_evidence": node_pool_upgrade_profile_evidence,
         }
 
     upgrade_errors = []
@@ -125,12 +136,20 @@ def aks_get_available_upgrades(subscription_id: str, resource_group: str, cluste
                 ]
         except Exception as exc:  # noqa: BLE001
             upgrade_errors.append(f"control-plane profile unavailable: {exc}")
+    else:
+        upgrade_errors.append("control-plane profile API unavailable")
 
     for pool in pools:
         upgrades = []
+        profile_available = False
+        upgrades_field_present = False
+        profile_error = None
         if hasattr(client.agent_pools, "get_upgrade_profile"):
             try:
                 pool_profile = client.agent_pools.get_upgrade_profile(resource_group, cluster_name, pool.name)
+                profile_available = True
+                raw_upgrades = getattr(pool_profile, "upgrades", None)
+                upgrades_field_present = raw_upgrades is not None
                 upgrades = [
                     {
                         "kubernetes_version": item.kubernetes_version,
@@ -138,11 +157,21 @@ def aks_get_available_upgrades(subscription_id: str, resource_group: str, cluste
                         "node_image_version": getattr(item, "node_image_version", None),
                     }
                     # Azure may return upgrades=None (not an empty list) when no upgrades are available.
-                    for item in (getattr(pool_profile, "upgrades", None) or [])
+                    for item in (raw_upgrades or [])
                 ]
             except Exception as exc:  # noqa: BLE001
-                upgrade_errors.append(f"node pool '{pool.name}' profile unavailable: {exc}")
+                profile_error = f"node pool '{pool.name}' profile unavailable: {exc}"
+                upgrade_errors.append(profile_error)
+        else:
+            profile_error = f"node pool '{pool.name}' profile API unavailable"
+            upgrade_errors.append(profile_error)
         node_pool_upgrades[pool.name] = upgrades
+        node_pool_upgrade_profile_evidence[pool.name] = {
+            "profile_available": profile_available,
+            "upgrades_field_present": upgrades_field_present,
+            "upgrade_versions": [item["kubernetes_version"] for item in upgrades],
+            "error": profile_error,
+        }
 
     return {
         "subscription_id": subscription_id,
@@ -153,5 +182,6 @@ def aks_get_available_upgrades(subscription_id: str, resource_group: str, cluste
         "current_node_pools": current_node_pools,
         "control_plane_upgrades": cluster_upgrades,
         "node_pool_upgrades": node_pool_upgrades,
+        "node_pool_upgrade_profile_evidence": node_pool_upgrade_profile_evidence,
         "upgrade_profile_errors": upgrade_errors,
     }

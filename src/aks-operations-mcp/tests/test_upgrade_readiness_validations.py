@@ -52,6 +52,54 @@ def test_single_replica_services_pass_for_two_replicas(monkeypatch):
     assert result["single_replica_workloads"] == []
 
 
+def test_single_replica_services_namespace_only_warns_for_one_replica(monkeypatch):
+    batch = {
+        "deployments": (
+            0,
+            '{"items":[{"metadata":{"namespace":"phonebook","name":"api"},'
+            '"spec":{"replicas":1},"status":{"availableReplicas":1}}]}',
+        ),
+        "statefulsets": (0, '{"items":[]}'),
+    }
+    monkeypatch.setattr(validation, "run_kubectl_batch", lambda *_a, **_k: batch)
+
+    result = aks_check_single_replica_services(*CLUSTER_ARGS, namespace="phonebook")
+
+    assert result["status"] == "WARNING"
+    assert result["matched_workloads"][0]["name"] == "api"
+    assert result["single_replica_workloads"][0]["name"] == "api"
+
+
+def test_single_replica_services_namespace_only_passes_for_two_replicas(monkeypatch):
+    batch = {
+        "deployments": (
+            0,
+            '{"items":[{"metadata":{"namespace":"phonebook","name":"api"},'
+            '"spec":{"replicas":2},"status":{"availableReplicas":2}}]}',
+        ),
+        "statefulsets": (0, '{"items":[]}'),
+    }
+    monkeypatch.setattr(validation, "run_kubectl_batch", lambda *_a, **_k: batch)
+
+    result = aks_check_single_replica_services(*CLUSTER_ARGS, namespace="phonebook")
+
+    assert result["status"] == "PASS"
+    assert result["single_replica_workloads"] == []
+
+
+def test_single_replica_services_namespace_only_is_incomplete_on_query_failure(monkeypatch):
+    batch = {
+        "deployments": (1, ""),
+        "statefulsets": (0, '{"items":[]}'),
+    }
+    monkeypatch.setattr(validation, "run_kubectl_batch", lambda *_a, **_k: batch)
+
+    result = aks_check_single_replica_services(*CLUSTER_ARGS, namespace="phonebook")
+
+    assert result["status"] == "INCOMPLETE"
+    assert result["query_errors"]
+
+
 def test_single_replica_services_is_not_configured_without_selector():
     result = aks_check_single_replica_services(*CLUSTER_ARGS)
 
@@ -168,6 +216,18 @@ def test_node_pool_surge_accepts_numeric_four_as_equivalent_capacity(monkeypatch
     assert result["status"] == "PASS"
 
 
+def test_node_pool_surge_is_incomplete_when_no_user_pools_are_found(monkeypatch):
+    pools = [SimpleNamespace(name="systempool", mode="System", count=3)]
+    fake_client = SimpleNamespace(agent_pools=SimpleNamespace(list=lambda *_a, **_k: pools))
+    monkeypatch.setattr(validation, "get_container_service_client", lambda *_a, **_k: fake_client)
+
+    result = aks_check_node_pool_surge(*CLUSTER_ARGS)
+
+    assert result["status"] == "INCOMPLETE"
+    assert result["user_pools_checked"] == 0
+    assert result["node_pools"] == []
+
+
 def test_priority_class_warns_for_non_compliant_critical_pod(monkeypatch):
     payload = {
         "items": [
@@ -210,35 +270,53 @@ def test_priority_class_passes_for_system_cluster_critical(monkeypatch):
     assert result["violations"] == []
 
 
-def test_validate_upgrade_readiness_integrates_new_checks(monkeypatch):
+def test_validate_upgrade_readiness_runs_only_mandatory_checks(monkeypatch):
     healthy = {"unhealthy_nodes": []}
     pod_health = {"unhealthy_pods": [], "query_errors": []}
     pdb_health = {"is_upgrade_safe": True}
     storage_health = {"blockers": [], "warnings": []}
     deprecated_health = {"blockers": [], "warnings": []}
-    single = {"status": "WARNING", "single_replica_workloads": [{"name": "cp-api"}]}
-    operator = {"status": "BLOCKED", "unhealthy_operators": [{"name": "operator"}]}
-    surge = {"recommendations": [{"pool_name": "userpool", "current_max_surge": "10%"}]}
-    priority = {"status": "WARNING", "violations": [{"name": "critical-agent"}]}
 
-    monkeypatch.setattr(upgrade, "aks_check_node_health", lambda *_a, **_k: healthy)
-    monkeypatch.setattr(upgrade, "aks_check_pod_health", lambda *_a, **_k: pod_health)
-    monkeypatch.setattr(upgrade, "aks_check_pdb", lambda *_a, **_k: pdb_health)
-    monkeypatch.setattr(upgrade, "aks_check_storage", lambda *_a, **_k: storage_health)
-    monkeypatch.setattr(upgrade, "aks_check_deprecated_apis", lambda *_a, **_k: deprecated_health)
-    monkeypatch.setattr(upgrade, "aks_check_single_replica_services", lambda *_a, **_k: single)
-    monkeypatch.setattr(upgrade, "aks_check_operator_health", lambda *_a, **_k: operator)
-    monkeypatch.setattr(upgrade, "aks_check_node_pool_surge", lambda *_a, **_k: surge)
-    monkeypatch.setattr(upgrade, "aks_check_priority_class", lambda *_a, **_k: priority)
+    mandatory_calls = []
+
+    def mandatory_result(name, result):
+        def check(*_args, **_kwargs):
+            mandatory_calls.append(name)
+            return result
+
+        return check
+
+    monkeypatch.setattr(upgrade, "aks_check_node_health", mandatory_result("node_health", healthy))
+    monkeypatch.setattr(upgrade, "aks_check_pod_health", mandatory_result("pod_health", pod_health))
+    monkeypatch.setattr(upgrade, "aks_check_pdb", mandatory_result("pdb_health", pdb_health))
+    monkeypatch.setattr(upgrade, "aks_check_storage", mandatory_result("storage_health", storage_health))
+    monkeypatch.setattr(upgrade, "aks_check_deprecated_apis", mandatory_result("deprecated_api_health", deprecated_health))
+
+    def unexpected_optional_call(*_args, **_kwargs):
+        raise AssertionError("Optional validation was called by mandatory readiness.")
+
+    for name in (
+        "aks_check_single_replica_services",
+        "aks_check_operator_health",
+        "aks_check_node_pool_surge",
+        "aks_check_priority_class",
+    ):
+        monkeypatch.setattr(upgrade, name, unexpected_optional_call, raising=False)
 
     result = upgrade.aks_validate_upgrade_readiness(*CLUSTER_ARGS, check_mode="full")
 
-    assert result["single_replica_health"] == single
-    assert result["operator_health"] == operator
-    assert result["node_pool_surge_health"] == surge
-    assert result["priority_class_health"] == priority
-    assert result["readiness"]["is_ready"] is False
-    assert any("single-replica" in item for item in result["readiness"]["blockers"])
-    assert any("operator" in item.lower() for item in result["readiness"]["blockers"])
-    assert any("maxsurge" in item.lower() for item in result["readiness"]["warnings"])
-    assert any("priorityclass" in item.lower() for item in result["readiness"]["warnings"])
+    assert result["readiness"]["is_ready"] is True
+    assert result["deep_check_errors"] == []
+    assert sorted(mandatory_calls) == [
+        "deprecated_api_health",
+        "node_health",
+        "pdb_health",
+        "pod_health",
+        "storage_health",
+    ]
+    assert all(name not in result for name in (
+        "single_replica_health",
+        "operator_health",
+        "node_pool_surge_health",
+        "priority_class_health",
+    ))
