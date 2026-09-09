@@ -2,13 +2,24 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from types import SimpleNamespace
+
+import pytest
 
 from tools import async_upgrade
 
 
 TARGET = "1.35.2"
 ARGS = ("sub", "rg", "cluster")
+
+
+@pytest.fixture(autouse=True)
+def clear_active_executions():
+    async_upgrade._ACTIVE_EXECUTIONS.clear()
+    yield
+    async_upgrade._ACTIVE_EXECUTIONS.clear()
 
 
 class Poller:
@@ -73,8 +84,8 @@ def _wire(monkeypatch, cluster, pool, readiness=None, pool_supported=True):
             "control_plane_upgrades": [{"kubernetes_version": TARGET}],
             "node_pool_upgrades": {pool.name: profile},
             "node_pool_upgrade_profile_evidence": {pool.name: {
-                "profile_available": True,
-                "upgrades_field_present": True,
+                "profile_available": pool_supported,
+                "upgrades_field_present": pool_supported,
                 "upgrade_versions": [TARGET] if pool_supported else ["1.35.1"],
                 "error": None,
             }},
@@ -100,6 +111,54 @@ def _wire(monkeypatch, cluster, pool, readiness=None, pool_supported=True):
         lambda *a: {"node_pools": [{"name": pool.name, "orchestrator_version": pool.orchestrator_version, "provisioning_state": pool.provisioning_state}]},
     )
     return client, available
+
+
+def test_invalid_scope_is_blocked_without_write(monkeypatch):
+    cluster = _cluster("1.35.1", "Succeeded")
+    pool = _pool()
+    client, _ = _wire(monkeypatch, cluster, pool)
+
+    result = async_upgrade.aks_execute_confirmed_upgrade(*ARGS, TARGET, confirmed_scope="invalid_scope")
+
+    assert result["status"] == "blocked"
+    assert result["reason_code"] == "INVALID_EXECUTION_SCOPE"
+    assert client.managed_clusters.writes == []
+    assert client.agent_pools.writes == []
+
+
+def test_concurrent_same_execution_submits_only_one_write(monkeypatch):
+    cluster = _cluster("1.35.1", "Succeeded")
+    pool = _pool()
+    client, _ = _wire(monkeypatch, cluster, pool)
+    readiness_started = Event()
+    release_readiness = Event()
+
+    def delayed_readiness(*_args, **_kwargs):
+        readiness_started.set()
+        release_readiness.wait(timeout=5)
+        return {"readiness": {"is_ready": True, "blockers": [], "warnings": []}}
+
+    monkeypatch.setattr(async_upgrade.sync_upgrade, "aks_validate_upgrade_readiness", delayed_readiness)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(
+            async_upgrade.aks_execute_confirmed_upgrade,
+            *ARGS,
+            TARGET,
+            confirmed_scope="control_plane_only",
+        )
+        assert readiness_started.wait(timeout=5)
+        second = async_upgrade.aks_execute_confirmed_upgrade(
+            *ARGS,
+            TARGET,
+            confirmed_scope="control_plane_only",
+        )
+        release_readiness.set()
+        first = first_future.result(timeout=5)
+
+    assert second["status"] == "in_progress"
+    assert second["reason_code"] == "UPGRADE_ALREADY_IN_PROGRESS"
+    assert first["status"] == "in_progress"
+    assert len(client.managed_clusters.writes) == 1
 
 
 def test_control_plane_submission_returns_without_waiting(monkeypatch):
@@ -180,9 +239,10 @@ def test_node_pool_in_progress_is_not_duplicated(monkeypatch):
     assert client.agent_pools.writes == []
 
 
-def test_failed_node_pool_operation_is_not_retried(monkeypatch):
+@pytest.mark.parametrize("terminal_state", ["Failed", "Canceled"])
+def test_failed_node_pool_operation_is_not_retried(monkeypatch, terminal_state):
     cluster = _cluster(TARGET, "Succeeded")
-    pool = _pool("nodepool1", "1.35.1", "Failed")
+    pool = _pool("nodepool1", "1.35.1", terminal_state)
     client, _ = _wire(monkeypatch, cluster, pool, pool_supported=True)
 
     result = async_upgrade.aks_execute_confirmed_upgrade(*ARGS, TARGET, confirmed_scope="complete_cluster")
