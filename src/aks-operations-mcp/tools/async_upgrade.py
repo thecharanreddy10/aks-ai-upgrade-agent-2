@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from threading import Lock
 from typing import Any
 
 from tools import upgrade as sync_upgrade
@@ -10,9 +11,98 @@ from tools.discovery import aks_get_available_upgrades, aks_get_cluster_details,
 
 _IN_PROGRESS_STATES = {"Updating", "Upgrading", "Creating", "Deleting", "Accepted", "InProgress", "In Progress"}
 _TERMINAL_FAILURE_STATES = {"Failed", "Canceled", "Cancelled"}
+_VALID_SCOPES = {"control_plane_only", "complete_cluster"}
+_ACTIVE_EXECUTIONS: set[tuple[str, str, str, str, str]] = set()
+_ACTIVE_EXECUTIONS_LOCK = Lock()
 
 
 def aks_execute_confirmed_upgrade(
+    subscription_id: str,
+    resource_group: str,
+    cluster_name: str,
+    target_kubernetes_version: str,
+    namespace: str | None = None,
+    maintenance_window_start_utc: str | None = None,
+    maintenance_window_end_utc: str | None = None,
+    check_mode: str = "full",
+    confirmed_scope: str = "complete_cluster",
+) -> dict[str, Any]:
+    """Validate scope and coordinate one active execution for this target and scope."""
+    result = _result(target_kubernetes_version, confirmed_scope)
+    if confirmed_scope not in _VALID_SCOPES:
+        return _finish(
+            result,
+            "blocked",
+            "confirmed_scope must be 'control_plane_only' or 'complete_cluster'.",
+            "INVALID_EXECUTION_SCOPE",
+            "scope_validation",
+        )
+
+    execution_key = (
+        subscription_id,
+        resource_group,
+        cluster_name,
+        target_kubernetes_version,
+        confirmed_scope,
+    )
+    with _ACTIVE_EXECUTIONS_LOCK:
+        already_active = execution_key in _ACTIVE_EXECUTIONS
+        if not already_active:
+            _ACTIVE_EXECUTIONS.add(execution_key)
+
+    if already_active:
+        state = _active_execution_state(
+            subscription_id,
+            resource_group,
+            cluster_name,
+            target_kubernetes_version,
+            confirmed_scope,
+        )
+        if state == "terminal_failure":
+            with _ACTIVE_EXECUTIONS_LOCK:
+                _ACTIVE_EXECUTIONS.discard(execution_key)
+            return _finish(
+                result,
+                "failed",
+                "The active Azure operation is in a terminal failure state; no automatic retry was submitted.",
+                "UPGRADE_OPERATION_TERMINAL_FAILURE",
+                "execution_state",
+            )
+        if state != "ready_to_advance":
+            return _finish(
+                result,
+                "in_progress",
+                "An upgrade operation for this target and scope is already active; no duplicate write was submitted.",
+                "UPGRADE_ALREADY_IN_PROGRESS",
+                "execution_state",
+            )
+        with _ACTIVE_EXECUTIONS_LOCK:
+            _ACTIVE_EXECUTIONS.discard(execution_key)
+
+    try:
+        result = _execute_confirmed_upgrade(
+            subscription_id,
+            resource_group,
+            cluster_name,
+            target_kubernetes_version,
+            namespace,
+            maintenance_window_start_utc,
+            maintenance_window_end_utc,
+            check_mode,
+            confirmed_scope,
+        )
+    except Exception:
+        with _ACTIVE_EXECUTIONS_LOCK:
+            _ACTIVE_EXECUTIONS.discard(execution_key)
+        raise
+
+    if result["status"] != "in_progress":
+        with _ACTIVE_EXECUTIONS_LOCK:
+            _ACTIVE_EXECUTIONS.discard(execution_key)
+    return result
+
+
+def _execute_confirmed_upgrade(
     subscription_id: str,
     resource_group: str,
     cluster_name: str,
@@ -334,6 +424,46 @@ def aks_execute_confirmed_upgrade(
         )
     result["next_action"] = None
     return _finish(result, "completed", "Complete-cluster upgrade verification succeeded.", "UPGRADE_COMPLETED", None)
+
+
+def _active_execution_state(
+    subscription_id: str,
+    resource_group: str,
+    cluster_name: str,
+    target: str,
+    scope: str,
+) -> str:
+    """Classify an active key conservatively from fresh Azure resource state."""
+    client = sync_upgrade.get_container_service_client(subscription_id)
+    cluster = client.managed_clusters.get(resource_group, cluster_name)
+    cluster_state = getattr(cluster, "provisioning_state", None)
+    cluster_version = (
+        getattr(cluster, "current_kubernetes_version", None)
+        or getattr(cluster, "kubernetes_version", None)
+    )
+    if cluster_state in _TERMINAL_FAILURE_STATES:
+        return "terminal_failure"
+    if cluster_state in _IN_PROGRESS_STATES:
+        return "running"
+    if cluster_state != "Succeeded" or cluster_version != target:
+        return "running"
+    if scope == "control_plane_only":
+        return "ready_to_advance"
+
+    pools = list(client.agent_pools.list(resource_group, cluster_name))
+    for pool in pools:
+        pool_state = getattr(pool, "provisioning_state", None)
+        if pool_state in _TERMINAL_FAILURE_STATES:
+            return "terminal_failure"
+        if pool_state in _IN_PROGRESS_STATES:
+            return "running"
+        pool_version = (
+            getattr(pool, "current_orchestrator_version", None)
+            or getattr(pool, "orchestrator_version", None)
+        )
+        if pool_state != "Succeeded" or pool_version != target:
+            return "ready_to_advance"
+    return "ready_to_advance"
 
 
 def _safe_poller_status(poller: Any) -> str | None:
