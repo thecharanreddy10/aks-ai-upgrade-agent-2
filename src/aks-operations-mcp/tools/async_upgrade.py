@@ -8,7 +8,7 @@ from tools import upgrade as sync_upgrade
 from tools.discovery import aks_get_available_upgrades, aks_get_cluster_details, aks_get_node_pools
 
 
-_IN_PROGRESS_STATES = {"Updating", "Creating", "Deleting", "Accepted", "InProgress", "In Progress"}
+_IN_PROGRESS_STATES = {"Updating", "Upgrading", "Creating", "Deleting", "Accepted", "InProgress", "In Progress"}
 
 
 def aks_execute_confirmed_upgrade(
