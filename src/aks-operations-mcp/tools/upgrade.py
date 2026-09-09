@@ -50,19 +50,44 @@ def aks_execute_confirmed_upgrade(
     maintenance_window_end_utc: str | None = None,
     check_mode: str = "full",
     confirmed_scope: str = "complete_cluster",
+    is_user_confirmed: bool = False,
 ) -> dict[str, Any]:
     """Execute a previously user-confirmed AKS upgrade and verify its outcome.
 
-    This tool has no application approval parameter. The calling agent must obtain
-    explicit user confirmation before invoking it; the server still enforces full
-    checks and its write-enable environment gate.
+    This tool enforces explicit user confirmation as a required authorization gate.
+    The calling agent must:
+    1. Obtain explicit user confirmation before invoking this tool
+    2. Pass is_user_confirmed=True to signal that confirmation has been received
+    3. Supply the confirmed_scope (control_plane_only or complete_cluster)
+
+    The server enforces multiple safety gates:
+    - Explicit user confirmation (is_user_confirmed=True)
+    - Environment-level write capability (AKS_UPGRADE_ENABLE_WRITE=true)
+    - Full mode checks (check_mode='full')
+    - Valid target version
+    - Supported control-plane upgrade path
+    - Mandatory readiness checks
+    - Scope-based node-pool execution control
 
     Args:
+        is_user_confirmed: Must be True to proceed with execution. False blocks all writes.
+            Represents explicit user confirmation obtained in the Agent Interface.
         confirmed_scope: The user-confirmed execution scope. Either "complete_cluster" (control plane
             and node pools if SUPPORTED) or "control_plane_only" (control plane only, no node-pool
             writes regardless of profile state). Node-pool execution requires explicit scope authorization.
     """
     result = _execution_result(target_kubernetes_version)
+
+    # Explicit confirmation is required before any write operation.
+    if not is_user_confirmed:
+        message = "Upgrade execution requires explicit user confirmation (is_user_confirmed=True)."
+        return _finish_execution(
+            result, "blocked", [message],
+            blocked_stage="authorization",
+            reason_code="EXECUTION_CONFIRMATION_REQUIRED",
+            message=message,
+        )
+
     gate_blocker = _upgrade_write_gate_blocker(check_mode)
     if gate_blocker:
         return _finish_execution(result, "blocked", [gate_blocker["message"]], **gate_blocker)

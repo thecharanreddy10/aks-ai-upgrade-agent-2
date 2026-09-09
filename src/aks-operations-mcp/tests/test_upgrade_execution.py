@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -135,12 +136,15 @@ def _wire(monkeypatch, pools=None, supported=True, evidence=True, control_suppor
 
 def _execute(monkeypatch, **kwargs):
     monkeypatch.setenv("AKS_UPGRADE_ENABLE_WRITE", "true")
+    # Existing tests assume confirmation is provided; new tests override this explicitly
+    if "is_user_confirmed" not in kwargs:
+        kwargs["is_user_confirmed"] = True
     return upgrade.aks_execute_confirmed_upgrade(*ARGS, TARGET, **kwargs)
 
 
 def test_write_gate_requires_full_check_mode(monkeypatch):
     monkeypatch.delenv("AKS_UPGRADE_ENABLE_WRITE", raising=False)
-    result = upgrade.aks_execute_confirmed_upgrade(*ARGS, TARGET, check_mode="quick")
+    result = upgrade.aks_execute_confirmed_upgrade(*ARGS, TARGET, check_mode="quick", is_user_confirmed=True)
     assert result["status"] == "blocked"
     assert result["blocked_stage"] == "execution_gate"
     assert result["reason_code"] == "CHECK_MODE_NOT_FULL"
@@ -155,7 +159,7 @@ def test_write_gate_requires_environment_enablement(monkeypatch):
         upgrade, "get_container_service_client",
         lambda *_args: pytest.fail("Azure client must not be created when the write gate is disabled"),
     )
-    result = upgrade.aks_execute_confirmed_upgrade(*ARGS, TARGET)
+    result = upgrade.aks_execute_confirmed_upgrade(*ARGS, TARGET, is_user_confirmed=True)
     assert result == {
         "status": "blocked",
         "blocked_stage": "execution_gate",
@@ -207,6 +211,176 @@ def test_maintenance_window_blocker_is_structured(monkeypatch):
     assert result["blocked_stage"] == "maintenance_window"
     assert result["reason_code"] == "MAINTENANCE_WINDOW_UNAVAILABLE"
     assert not client.managed_clusters.writes and not client.agent_pools.writes
+
+
+# Authorization Tests
+# ===================
+# These tests validate the explicit confirmation authorization model.
+# is_user_confirmed=True is required before any Azure write.
+# AKS_UPGRADE_ENABLE_WRITE=true is a deployment-level capability switch.
+
+
+def test_authorization_a_confirmed_with_write_enabled_proceeds_to_write(monkeypatch):
+    """Authorization A: AKS_UPGRADE_ENABLE_WRITE=true + is_user_confirmed=true → write allowed."""
+    client, _cluster_obj, _pools, profiles = _wire(monkeypatch)
+    monkeypatch.setenv("AKS_UPGRADE_ENABLE_WRITE", "true")
+    result = upgrade.aks_execute_confirmed_upgrade(
+        *ARGS, TARGET, is_user_confirmed=True, confirmed_scope="control_plane_only"
+    )
+    assert result["status"] == "completed"
+    assert result["write_accepted"] is True
+    assert len(client.managed_clusters.writes) == 1
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {},
+        {"is_user_confirmed": False},
+        {"target_kubernetes_version": "1.35.1"},
+        {"target_kubernetes_version": "1.35.1", "is_user_confirmed": False},
+    ],
+)
+def test_authorization_contract_non_confirmation_cases_block(monkeypatch, kwargs):
+    """Agent/MCP contract: target-only requests never count as confirmation."""
+    _wire(monkeypatch)
+    monkeypatch.setenv("AKS_UPGRADE_ENABLE_WRITE", "true")
+    call_kwargs = dict(kwargs)
+    call_kwargs.setdefault("is_user_confirmed", False)
+    target_value = call_kwargs.pop("target_kubernetes_version", TARGET)
+    # The target may be present, but it must never satisfy the authorization gate by itself.
+    result = upgrade.aks_execute_confirmed_upgrade(*ARGS, target_value, **call_kwargs)
+    assert result["status"] == "blocked"
+    assert result["blocked_stage"] == "authorization"
+    assert result["reason_code"] == "EXECUTION_CONFIRMATION_REQUIRED"
+    assert result["write_submission_attempted"] is False
+    assert result["pollers_created"] is False
+    assert result["cluster_modified"] is False
+
+
+def test_agent_instructions_require_explicit_confirmation(monkeypatch):
+    """Agent instructions must require explicit approval and classify non-approval cases."""
+    del monkeypatch
+    main_py = Path(__file__).resolve().parents[2] / "agent-framework-agent-with-foundry-toolbox-responses" / "main.py"
+    text = main_py.read_text(encoding="utf-8")
+    # New policy: AKS UPGRADE HUMAN APPROVAL POLICY
+    assert "explicitly approved" in text
+    assert "explicit approval" in text
+    assert "Never execute an AKS control-plane" in text
+    assert "explicit approval of the displayed upgrade plan" in text
+    assert "Do not execute the upgrade immediately" in text
+    assert "Stop and ask the user" in text
+    assert "`control_plane_only`" in text
+
+
+def test_agent_instructions_accept_concise_confirmations_for_current_pending_plan(monkeypatch):
+    """Agent must require specific approval examples referring to the upgrade plan."""
+    del monkeypatch
+    main_py = Path(__file__).resolve().parents[2] / "agent-framework-agent-with-foundry-toolbox-responses" / "main.py"
+    text = main_py.read_text(encoding="utf-8")
+    # New policy includes examples of valid approval
+    assert "Yes, proceed with the upgrade to 1.35.1" in text
+    assert "I approve the control-plane upgrade to 1.35.1" in text
+    assert "Yes, proceed with the complete cluster upgrade to 1.35.1" in text
+
+
+def test_agent_instructions_reject_confirmation_for_different_target_or_scope(monkeypatch):
+    """Different target/scope than the upgrade plan must block execution."""
+    del monkeypatch
+    main_py = Path(__file__).resolve().parents[2] / "agent-framework-agent-with-foundry-toolbox-responses" / "main.py"
+    text = main_py.read_text(encoding="utf-8")
+    # New policy: execute scope policy and no automatic expansion
+    assert "Never convert" in text
+    assert "never infer" in text.lower()
+    assert "do not expand" in text.lower()
+
+
+def test_agent_instructions_require_pending_plan_for_generic_confirmation(monkeypatch):
+    """Generic statements must not be treated as approval without clear upgrade plan reference."""
+    del monkeypatch
+    main_py = Path(__file__).resolve().parents[2] / "agent-framework-agent-with-foundry-toolbox-responses" / "main.py"
+    text = main_py.read_text(encoding="utf-8")
+    # New policy: ambiguous approval cases that must NOT authorize execution
+    assert "Do NOT treat any of the following as approval" in text
+    assert "Ambiguous statements such as" in text
+    assert "When approval is ambiguous" in text
+
+
+def test_authorization_b_not_confirmed_blocks_before_write(monkeypatch):
+    """Authorization B: AKS_UPGRADE_ENABLE_WRITE=true + is_user_confirmed=false → blocked."""
+    _wire(monkeypatch)
+    monkeypatch.setenv("AKS_UPGRADE_ENABLE_WRITE", "true")
+    result = upgrade.aks_execute_confirmed_upgrade(
+        *ARGS, TARGET, is_user_confirmed=False
+    )
+    assert result["status"] == "blocked"
+    assert result["blocked_stage"] == "authorization"
+    assert result["reason_code"] == "EXECUTION_CONFIRMATION_REQUIRED"
+    # No Azure calls should be made
+    assert result["write_submission_attempted"] is False
+    assert result["pollers_created"] is False
+    assert result["cluster_modified"] is False
+
+
+def test_authorization_c_confirmed_with_write_disabled_blocks(monkeypatch):
+    """Authorization C: AKS_UPGRADE_ENABLE_WRITE=false + is_user_confirmed=true → blocked."""
+    _wire(monkeypatch)
+    monkeypatch.delenv("AKS_UPGRADE_ENABLE_WRITE", raising=False)
+    result = upgrade.aks_execute_confirmed_upgrade(
+        *ARGS, TARGET, is_user_confirmed=True
+    )
+    assert result["status"] == "blocked"
+    assert result["blocked_stage"] == "execution_gate"
+    assert result["reason_code"] == "UPGRADE_WRITE_DISABLED"
+    # Confirmation present but write capability disabled
+    assert result["write_submission_attempted"] is False
+    assert result["pollers_created"] is False
+
+
+def test_authorization_d_confirmed_control_plane_only_prevents_node_pool_writes(monkeypatch):
+    """Authorization D: control_plane_only scope forbids node-pool writes even if SUPPORTED."""
+    client, _cluster_obj, pools, _profiles = _wire(monkeypatch)
+    monkeypatch.setenv("AKS_UPGRADE_ENABLE_WRITE", "true")
+    result = upgrade.aks_execute_confirmed_upgrade(
+        *ARGS, TARGET, is_user_confirmed=True, confirmed_scope="control_plane_only"
+    )
+    assert result["status"] == "completed"
+    assert result["reason_code"] == "CONTROL_PLANE_ONLY_SCOPE"
+    # Control plane can write
+    assert len(client.managed_clusters.writes) == 1
+    # But node pools MUST NOT write
+    assert len(client.agent_pools.writes) == 0
+    assert pools[0].orchestrator_version != TARGET
+
+
+def test_authorization_e_complete_cluster_allows_supported_node_pool_writes(monkeypatch):
+    """Authorization E: complete_cluster scope + SUPPORTED node pools → pool writes allowed."""
+    client, _cluster_obj, pools, _profiles = _wire(monkeypatch)
+    monkeypatch.setenv("AKS_UPGRADE_ENABLE_WRITE", "true")
+    result = upgrade.aks_execute_confirmed_upgrade(
+        *ARGS, TARGET, is_user_confirmed=True, confirmed_scope="complete_cluster"
+    )
+    assert result["status"] == "completed"
+    assert result["execution_scope"] == "complete_cluster"
+    # Both control plane and node pools should write
+    assert len(client.managed_clusters.writes) == 1
+    assert len(client.agent_pools.writes) == 1
+    assert pools[0].orchestrator_version == TARGET
+
+
+def test_authorization_f_target_version_alone_does_not_count_as_confirmation(monkeypatch):
+    """Authorization F: Supplying only target_kubernetes_version is not confirmation."""
+    _wire(monkeypatch)
+    monkeypatch.setenv("AKS_UPGRADE_ENABLE_WRITE", "true")
+    # Call with only target_kubernetes_version, no is_user_confirmed
+    result = upgrade.aks_execute_confirmed_upgrade(
+        *ARGS, TARGET
+        # is_user_confirmed defaults to False
+    )
+    assert result["status"] == "blocked"
+    assert result["reason_code"] == "EXECUTION_CONFIRMATION_REQUIRED"
+    # No Azure operations
+    assert result["write_submission_attempted"] is False
 
 
 def test_successful_control_plane_lro_and_post_upgrade_verification(monkeypatch):
@@ -280,7 +454,7 @@ def test_control_plane_only_scope_with_supported_pool_prevents_pool_write(monkey
     """Scope enforcement: control_plane_only + SUPPORTED pool → no nodepool write."""
     client, _cluster_obj, pools, profiles = _wire(monkeypatch)
     monkeypatch.setenv("AKS_UPGRADE_ENABLE_WRITE", "true")
-    result = upgrade.aks_execute_confirmed_upgrade(*ARGS, TARGET, confirmed_scope="control_plane_only")
+    result = upgrade.aks_execute_confirmed_upgrade(*ARGS, TARGET, confirmed_scope="control_plane_only", is_user_confirmed=True)
 
     # Control plane should succeed
     assert result["status"] == "completed"
@@ -298,7 +472,7 @@ def test_control_plane_only_scope_with_insufficient_pool_prevents_pool_write(mon
     """Scope enforcement: control_plane_only + INSUFFICIENT_EVIDENCE pool → no nodepool write."""
     client, *_ = _wire(monkeypatch, supported=True, evidence=False)
     monkeypatch.setenv("AKS_UPGRADE_ENABLE_WRITE", "true")
-    result = upgrade.aks_execute_confirmed_upgrade(*ARGS, TARGET, confirmed_scope="control_plane_only")
+    result = upgrade.aks_execute_confirmed_upgrade(*ARGS, TARGET, confirmed_scope="control_plane_only", is_user_confirmed=True)
 
     assert result["status"] == "completed"
     assert result["control_plane"]["status"] == "succeeded"
@@ -312,7 +486,7 @@ def test_control_plane_only_scope_with_unsupported_pool_prevents_pool_write(monk
     """Scope enforcement: control_plane_only + UNSUPPORTED pool → no nodepool write."""
     client, *_ = _wire(monkeypatch, supported=False, evidence=True)
     monkeypatch.setenv("AKS_UPGRADE_ENABLE_WRITE", "true")
-    result = upgrade.aks_execute_confirmed_upgrade(*ARGS, TARGET, confirmed_scope="control_plane_only")
+    result = upgrade.aks_execute_confirmed_upgrade(*ARGS, TARGET, confirmed_scope="control_plane_only", is_user_confirmed=True)
 
     assert result["status"] == "completed"
     assert result["control_plane"]["status"] == "succeeded"
@@ -326,7 +500,7 @@ def test_complete_cluster_scope_with_supported_pool_allows_pool_write(monkeypatc
     """Scope enforcement: complete_cluster + SUPPORTED pool → nodepool write allowed."""
     client, _cluster_obj, pools, profiles = _wire(monkeypatch)
     monkeypatch.setenv("AKS_UPGRADE_ENABLE_WRITE", "true")
-    result = upgrade.aks_execute_confirmed_upgrade(*ARGS, TARGET, confirmed_scope="complete_cluster")
+    result = upgrade.aks_execute_confirmed_upgrade(*ARGS, TARGET, confirmed_scope="complete_cluster", is_user_confirmed=True)
 
     # Both control plane and node pool should succeed
     assert result["status"] == "completed"
@@ -344,7 +518,7 @@ def test_default_scope_is_complete_cluster(monkeypatch):
     """Default confirmed_scope should be complete_cluster."""
     client, _cluster_obj, pools, profiles = _wire(monkeypatch)
     monkeypatch.setenv("AKS_UPGRADE_ENABLE_WRITE", "true")
-    result = upgrade.aks_execute_confirmed_upgrade(*ARGS, TARGET)
+    result = upgrade.aks_execute_confirmed_upgrade(*ARGS, TARGET, is_user_confirmed=True)
 
     # Default behavior (complete_cluster) should allow node-pool execution
     assert result["status"] == "completed"
@@ -417,3 +591,36 @@ def test_optional_validations_are_never_called(monkeypatch):
         monkeypatch.setattr(upgrade, name, lambda *_a, **_k: pytest.fail("optional validation invoked"), raising=False)
     result = _execute(monkeypatch)
     assert result["status"] == "completed"
+
+
+# Regression test for discovered authorization flaw
+# ===================================================
+# Live test on 2026-09-09 revealed that the agent could set is_user_confirmed=true
+# itself, without a human approval mechanism, causing an unauthorized AKS write.
+# The Foundry Toolbox is configured with require_approval="never", so there is no
+# trusted channel for passing human approval state from the UI to the MCP tool.
+# The root cause: is_user_confirmed is just a parameter, not a cryptographically or
+# independently trusted signal of human approval.
+
+
+def test_regression_is_user_confirmed_cannot_be_trusted_as_sole_authorization():
+    """
+    REGRESSION: is_user_confirmed=true cannot be trusted as proof of human approval
+    when agent can supply it directly in tool arguments.
+
+    Root cause: Foundry Toolbox + Agent Framework + MCP architecture provides no
+    trusted channel for passing human approval from a UI layer to the MCP tool.
+    The Toolbox is configured with require_approval="never", so the only
+    authorization boundary must be the deployment-level AKS_UPGRADE_ENABLE_WRITE gate.
+
+    Safest fallback: AKS_UPGRADE_ENABLE_WRITE stays disabled by default.
+    Operator must explicitly enable it at deployment time.
+    Agent-level is_user_confirmed check remains as a UX contract, but cannot be
+    relied upon as the sole security boundary.
+
+    This test documents the architectural constraint discovered in live validation.
+    """
+    # This is a documentation test; the actual security boundary is the deployment
+    # environment variable, not a parameter that the agent can fabricate.
+    # See: toolbox.yaml require_approval="never"
+    pass
