@@ -9,6 +9,7 @@ from tools.discovery import aks_get_available_upgrades, aks_get_cluster_details,
 
 
 _IN_PROGRESS_STATES = {"Updating", "Upgrading", "Creating", "Deleting", "Accepted", "InProgress", "In Progress"}
+_TERMINAL_FAILURE_STATES = {"Failed", "Canceled", "Cancelled"}
 
 
 def aks_execute_confirmed_upgrade(
@@ -29,7 +30,7 @@ def aks_execute_confirmed_upgrade(
     per call, and returns quickly so the agent can poll `aks_get_upgrade_execution_status` and call this
     coordinator again to advance the workflow.
 
-    The workflow is deliberately idempotent against the live Azure state: if a control-plane or node-pool
+    The workflow is deliberately idempotent against live Azure state: if a control-plane or node-pool
     operation is already in progress, the tool reports that state and performs no duplicate write.
     """
     result = _result(target_kubernetes_version, confirmed_scope)
@@ -62,9 +63,42 @@ def aks_execute_confirmed_upgrade(
             "control_plane_path",
         )
 
+    client = sync_upgrade.get_container_service_client(subscription_id)
+    live_cluster = client.managed_clusters.get(resource_group, cluster_name)
+    result["control_plane"]["before"] = sync_upgrade._cluster_execution_state(live_cluster)
+    live_cluster_state = getattr(live_cluster, "provisioning_state", None)
+
+    if live_cluster_state in _IN_PROGRESS_STATES:
+        result["control_plane"]["status"] = "in_progress"
+        result["control_plane"]["poller_status"] = live_cluster_state
+        return _finish(
+            result,
+            "in_progress",
+            "A control-plane Azure operation is already in progress; no duplicate write was submitted.",
+            "CONTROL_PLANE_ALREADY_IN_PROGRESS",
+            "control_plane_execution",
+        )
+
+    if live_cluster_state in _TERMINAL_FAILURE_STATES:
+        return _finish(
+            result,
+            "failed",
+            f"The control-plane Azure operation is in terminal state '{live_cluster_state}'; no automatic retry was submitted.",
+            "CONTROL_PLANE_OPERATION_TERMINAL_FAILURE",
+            "control_plane_execution",
+        )
+
+    live_current_control_plane = (
+        getattr(live_cluster, "current_kubernetes_version", None)
+        or getattr(live_cluster, "kubernetes_version", None)
+    )
+    live_control_plane_at_target = (
+        live_current_control_plane == target_kubernetes_version
+        and live_cluster_state == "Succeeded"
+    )
+
     control_upgrades = upgrades.get("control_plane_upgrades")
-    current_control_plane = upgrades.get("current_control_plane_version")
-    if current_control_plane != target_kubernetes_version:
+    if not live_control_plane_at_target:
         if not isinstance(control_upgrades, list) or not sync_upgrade._profile_offers_target(
             control_upgrades, target_kubernetes_version
         ):
@@ -94,27 +128,12 @@ def aks_execute_confirmed_upgrade(
                 blockers=blockers,
             )
 
-        client = sync_upgrade.get_container_service_client(subscription_id)
-        cluster = client.managed_clusters.get(resource_group, cluster_name)
-        result["control_plane"]["before"] = sync_upgrade._cluster_execution_state(cluster)
-        provisioning_state = getattr(cluster, "provisioning_state", None)
-        if provisioning_state in _IN_PROGRESS_STATES:
-            result["control_plane"]["status"] = "in_progress"
-            result["control_plane"]["poller_status"] = provisioning_state
-            return _finish(
-                result,
-                "in_progress",
-                "Control-plane upgrade is already in progress; no duplicate write was submitted.",
-                "CONTROL_PLANE_ALREADY_IN_PROGRESS",
-                "control_plane_execution",
-            )
-
-        cluster.kubernetes_version = target_kubernetes_version
+        live_cluster.kubernetes_version = target_kubernetes_version
         try:
             poller = sync_upgrade._begin_create_or_update(
                 client.managed_clusters.begin_create_or_update,
                 (resource_group, cluster_name),
-                cluster,
+                live_cluster,
             )
         except Exception as exc:  # noqa: BLE001
             return _finish(
@@ -198,28 +217,59 @@ def aks_execute_confirmed_upgrade(
             blockers=blockers,
         )
 
-    client = sync_upgrade.get_container_service_client(subscription_id)
     for pool_summary in pools:
         pool_name = pool_summary.get("name")
-        observed_version = pool_summary.get("orchestrator_version")
-        if observed_version == target_kubernetes_version:
-            result["node_pools"].append(
-                {"name": pool_name, "status": "completed", "path_status": "NOT_REQUIRED", "before": dict(pool_summary), "after": dict(pool_summary)}
-            )
-            continue
-
         evidence = evidence_map.get(pool_name, {})
         profile = profiles.get(pool_name) if isinstance(profiles, dict) else None
         path_status = sync_upgrade._node_pool_path_status(evidence, profile, target_kubernetes_version)
+        pool = client.agent_pools.get(resource_group, cluster_name, pool_name)
         pool_result = {
             "name": pool_name,
             "path_status": path_status,
             "status": "skipped",
-            "before": dict(pool_summary),
+            "before": sync_upgrade._pool_execution_state(pool),
             "after": None,
             "error": None,
             "evidence": evidence,
         }
+
+        live_pool_state = getattr(pool, "provisioning_state", None)
+        live_pool_version = (
+            getattr(pool, "current_orchestrator_version", None)
+            or getattr(pool, "orchestrator_version", None)
+        )
+        if live_pool_state in _IN_PROGRESS_STATES:
+            pool_result["status"] = "in_progress"
+            pool_result["poller_status"] = live_pool_state
+            result["node_pools"].append(pool_result)
+            result["next_action"] = "poll_status"
+            return _finish(
+                result,
+                "in_progress",
+                f"Node-pool '{pool_name}' upgrade is already in progress; no duplicate write was submitted.",
+                "NODE_POOL_ALREADY_IN_PROGRESS",
+                "node_pool_execution",
+            )
+
+        if live_pool_state in _TERMINAL_FAILURE_STATES:
+            pool_result["status"] = "failed"
+            pool_result["error"] = f"Azure reports terminal provisioning state '{live_pool_state}'."
+            result["node_pools"].append(pool_result)
+            return _finish(
+                result,
+                "partial",
+                f"Node-pool '{pool_name}' is in terminal Azure state '{live_pool_state}'; no automatic retry was submitted.",
+                "NODE_POOL_OPERATION_TERMINAL_FAILURE",
+                "node_pool_execution",
+            )
+
+        if live_pool_version == target_kubernetes_version and live_pool_state == "Succeeded":
+            pool_result["status"] = "completed"
+            pool_result["path_status"] = "NOT_REQUIRED"
+            pool_result["after"] = sync_upgrade._pool_execution_state(pool)
+            result["node_pools"].append(pool_result)
+            continue
+
         result["node_pools"].append(pool_result)
 
         if path_status != "SUPPORTED":
@@ -235,21 +285,6 @@ def aks_execute_confirmed_upgrade(
                 message,
                 "NODE_POOL_PROFILE_INSUFFICIENT" if path_status == "INSUFFICIENT_EVIDENCE" else "NODE_POOL_TARGET_UNSUPPORTED",
                 "node_pool_path",
-            )
-
-        pool = client.agent_pools.get(resource_group, cluster_name, pool_name)
-        pool_result["before"] = sync_upgrade._pool_execution_state(pool)
-        provisioning_state = getattr(pool, "provisioning_state", None)
-        if provisioning_state in _IN_PROGRESS_STATES:
-            pool_result["status"] = "in_progress"
-            pool_result["poller_status"] = provisioning_state
-            result["next_action"] = "poll_status"
-            return _finish(
-                result,
-                "in_progress",
-                f"Node-pool '{pool_name}' upgrade is already in progress; no duplicate write was submitted.",
-                "NODE_POOL_ALREADY_IN_PROGRESS",
-                "node_pool_execution",
             )
 
         pool.orchestrator_version = target_kubernetes_version
