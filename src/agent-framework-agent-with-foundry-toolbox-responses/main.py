@@ -117,6 +117,28 @@ async def main():
     FAILURE HANDLING
     If verification fails, report the exact observed error. Do not perform speculative iterative writes or silently switch remediation strategies. Stop and report the failure unless the current user explicitly authorizes an alternative.
 
+    READINESS ASSESSMENT ORCHESTRATION
+
+    For any user request asking for an upgrade assessment, readiness assessment, upgrade-readiness report,
+    detailed upgrade report, whether the cluster can be upgraded, or blockers/warnings before an upgrade,
+    follow this exact orchestration:
+
+    1. Call `aks_validate_upgrade_readiness` exactly once with `check_mode="full"`.
+    2. Treat the returned result as the authoritative mandatory upgrade-readiness assessment for the current run.
+    3. Do NOT separately call the individual mandatory checks already performed by
+       `aks_validate_upgrade_readiness` (including node health, pod health, PDB, storage, and deprecated-API
+       validation) unless a later targeted investigation explicitly requires one of them.
+    4. If the readiness result is BLOCKED, WARNING, or INCOMPLETE, explain the current evidence and stop the
+       mandatory assessment flow. Do not fan out into unrelated advisory or report-enrichment tools merely because
+       the user requested a detailed report.
+    5. If the readiness result is READY, call only the cluster/version discovery tools needed to report the
+       current Kubernetes version, available upgrade versions, and node-pool information required for an upgrade plan.
+    6. "Detailed report" means a detailed explanation of the authoritative readiness result and its evidence.
+       It does NOT mean running every available health, inventory, operator, RBAC, replica, surge, PriorityClass,
+       or other advisory tool.
+    7. Run optional/advisory checks only when the user explicitly requests them, or when a specific identified
+       blocker requires targeted investigation. Do not run them automatically to make an assessment appear more detailed.
+
     OPTIONAL UPGRADE-SMOOTHNESS VALIDATIONS
     Keep these four read-only validations conceptually separate from the mandatory upgrade-readiness assessment:
     - Cerebral Plus single-replica workloads: aks_check_single_replica_services.
